@@ -14,12 +14,34 @@ import type {
   WeaponResourceMode,
   WeaponSlotUI,
 } from './types';
-import { loadBossRushRecords, loadRecords, loadSettings, saveSettings } from './rules';
+import {
+  detectTouchDevice,
+  loadBossRushRecords,
+  loadRecords,
+  loadSettings,
+  saveSettings,
+} from './rules';
 
 /* ==========================================
    مخزن الحالة المشترك بين محرك اللعبة وواجهة React
    (لا يحتوي على منطق لعب — مجرد جسر بيانات وأوامر)
    ========================================== */
+
+export interface TouchInputActions {
+  setTouchMove: (moveX: number, moveZ: number, autoSprint: boolean) => void;
+  addTouchLook: (dx: number, dy: number) => void;
+  setTouchFire: (firing: boolean) => void;
+  toggleTouchAds: () => void;
+  setTouchAds: (ads: boolean) => void;
+  triggerTouchJump: () => void;
+  triggerTouchSlide: () => void;
+  triggerTouchDash: () => void;
+  triggerTouchReload: () => void;
+  triggerTouchGrenade: () => void;
+  cycleTouchWeapon: (step: 1 | -1) => void;
+  stepTouchZoom: () => void;
+  setTouchHoldBreath: (holding: boolean) => void;
+}
 
 export interface EngineBridgeActions {
   startMission: (mapId?: MapId, mode?: GameMode) => void;
@@ -30,12 +52,15 @@ export interface EngineBridgeActions {
   previewMap: (mapId: MapId) => void;
   selectUpgrade: (upgradeId: string) => void;
   applySettings: (settings: GameSettings) => void;
+  touch: TouchInputActions;
 }
 
 export interface GameStoreState {
-  // حالة الشاشة ووضع اللعب
+  // حالة الشاشة ووضع اللعب وجهاز اللمس
   screen: GameScreenState;
   settingsOpen: boolean;
+  isTouchDevice: boolean;
+  isPortrait: boolean;
   selectedMode: GameMode;
   activeMode: GameMode;
   selectedMap: MapId;
@@ -150,14 +175,19 @@ export interface GameStoreState {
   setHudPatch: (patch: Partial<GameStoreState>) => void;
 }
 
+const initialTouchDevice = detectTouchDevice();
+const initialPortrait =
+  typeof window !== 'undefined' ? window.innerHeight > window.innerWidth : false;
 const initialRecords = loadRecords();
 const initialBossRushRecords = loadBossRushRecords();
-const initialSettings = loadSettings();
+const initialSettings = loadSettings(initialTouchDevice);
 let killFeedSeq = 1;
 
 export const useGameStore = create<GameStoreState>((set, get) => ({
   screen: 'title',
   settingsOpen: false,
+  isTouchDevice: initialTouchDevice,
+  isPortrait: initialPortrait,
   selectedMode: 'normal',
   activeMode: 'normal',
   selectedMap: 'lab',

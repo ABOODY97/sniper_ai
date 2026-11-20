@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { MoveInputState } from './types';
 import type { MapManager } from './maps/MapManager';
 import type { AudioManager } from './audio/AudioManager';
 import type { ObjectPools } from './pools/ObjectPools';
@@ -207,9 +208,9 @@ export class Player {
     this.applyCameraRotation();
   }
 
-  /** تفعيل الاندفاع السريع على مفتاح Q (ممنوع أثناء دوران الميني غان) */
+  /** تفعيل الاندفاع السريع على مفتاح Q أو زر الاندفاع اللمسي (ممنوع أثناء دوران الميني غان) */
   public triggerDash(
-    keys: Record<string, boolean>,
+    moveInput: MoveInputState,
     audio: AudioManager,
     mobilityRestricted = false,
   ): boolean {
@@ -223,10 +224,12 @@ export class Player {
     _forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     _right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     this.dashDir.set(0, 0, 0);
-    if (keys['KeyW'] || keys['ArrowUp']) this.dashDir.add(_forward);
-    if (keys['KeyS'] || keys['ArrowDown']) this.dashDir.sub(_forward);
-    if (keys['KeyD'] || keys['ArrowRight']) this.dashDir.add(_right);
-    if (keys['KeyA'] || keys['ArrowLeft']) this.dashDir.sub(_right);
+    if (Math.abs(moveInput.moveZ) > 0.05) {
+      this.dashDir.addScaledVector(_forward, moveInput.moveZ);
+    }
+    if (Math.abs(moveInput.moveX) > 0.05) {
+      this.dashDir.addScaledVector(_right, moveInput.moveX);
+    }
     if (this.dashDir.lengthSq() < 0.01) this.dashDir.copy(_forward);
     this.dashDir.normalize();
 
@@ -239,7 +242,7 @@ export class Player {
 
   /** بدء التزحلق (0.85ث) أثناء الركض على الأرض (ممنوع أثناء دوران الميني غان) */
   public triggerSlide(
-    keys: Record<string, boolean>,
+    moveInput: MoveInputState,
     audio: AudioManager,
     mobilityRestricted = false,
   ): boolean {
@@ -257,8 +260,9 @@ export class Player {
     _forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     _right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     this.slideDir.copy(_forward);
-    if (keys['KeyD'] || keys['ArrowRight']) this.slideDir.addScaledVector(_right, 0.35);
-    if (keys['KeyA'] || keys['ArrowLeft']) this.slideDir.addScaledVector(_right, -0.35);
+    if (Math.abs(moveInput.moveX) > 0.05) {
+      this.slideDir.addScaledVector(_right, moveInput.moveX * 0.35);
+    }
     this.slideDir.normalize();
 
     this.isSliding = true;
@@ -319,7 +323,7 @@ export class Player {
   public update(
     dt: number,
     rawDt: number,
-    keys: Record<string, boolean>,
+    moveInput: MoveInputState,
     isADS: boolean,
     isReloading: boolean,
     mapManager: MapManager,
@@ -349,15 +353,16 @@ export class Player {
     _right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     _move.set(0, 0, 0);
 
-    const holdingForward = !!(keys['KeyW'] || keys['ArrowUp']);
-    const holdingShift = !!(keys['ShiftLeft'] || keys['ShiftRight']);
+    const inputMag = Math.min(1, Math.hypot(moveInput.moveX, moveInput.moveZ));
+    const holdingForward = moveInput.moveZ > 0.25;
+    const holdingShift = moveInput.sprint;
 
-    if (holdingForward) _move.add(_forward);
-    if (keys['KeyS'] || keys['ArrowDown']) _move.sub(_forward);
-    if (keys['KeyD'] || keys['ArrowRight']) _move.add(_right);
-    if (keys['KeyA'] || keys['ArrowLeft']) _move.sub(_right);
+    if (inputMag > 0.01) {
+      _move.addScaledVector(_forward, moveInput.moveZ);
+      _move.addScaledVector(_right, moveInput.moveX);
+    }
 
-    this.isMoving = _move.lengthSq() > 0;
+    this.isMoving = inputMag > 0.01;
 
     // منطق الركض والطاقة (Stamina)
     const canSprint =
@@ -408,9 +413,7 @@ export class Player {
       this.slideTimer -= dt;
       const slideSpeed = computeSlideSpeed(this.slideTimer, this.speedMult);
 
-      let steer = 0;
-      if (keys['KeyD'] || keys['ArrowRight']) steer += 1;
-      if (keys['KeyA'] || keys['ArrowLeft']) steer -= 1;
+      const steer = Math.max(-1, Math.min(1, moveInput.moveX));
       _slideMove.copy(this.slideDir).addScaledVector(_right, steer * 0.2).normalize();
       this.camera.position.addScaledVector(_slideMove, slideSpeed * dt);
 
@@ -438,10 +441,14 @@ export class Player {
           ? PLAYER_CONSTANTS.ADS_SPEED
           : PLAYER_CONSTANTS.WALK_SPEED;
       _move.normalize();
-      this.camera.position.addScaledVector(_move, baseSpeed * this.speedMult * weaponMoveMult * dt);
+      const analogFactor = this.isSprinting ? 1.0 : inputMag;
+      this.camera.position.addScaledVector(
+        _move,
+        baseSpeed * analogFactor * this.speedMult * weaponMoveMult * dt,
+      );
 
       if (this.onGround) {
-        this.bobTimer += dt * (this.isSprinting ? 14.8 : 9.8);
+        this.bobTimer += dt * (this.isSprinting ? 14.8 : 9.8) * Math.max(0.45, analogFactor);
         this.stepSoundTimer -= dt;
         if (this.stepSoundTimer <= 0) {
           audio.play('step');

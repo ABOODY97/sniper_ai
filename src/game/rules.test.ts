@@ -17,7 +17,9 @@ import {
   computeComboMultiplier,
   computeEffectiveFogDensity,
   computeEffectiveGravity,
+  computeEffectivePixelRatio,
   computeHitDamage,
+  computeJoystickInput,
   computeKillPoints,
   computeSlideSpeed,
   computeWaveEnemyCount,
@@ -29,6 +31,7 @@ import {
   getMapDisplayName,
   isBulletHittingPlayerHeight,
   isPointInFlameCone,
+  loadSettings,
   pickBossArchetypeForWave,
   pickBossRushArchetype,
   pickEnemyTypeForWave,
@@ -516,4 +519,47 @@ test('تنسيق زمن الجولة وتقييم أفضل سجل منفصل ل�
   assert.equal(r4.isNewRecord, true);
   assert.equal(r4.bestBosses, 5);
   assert.equal(r4.bestTimeSec, 310);
+});
+
+test('دعم الجوال: عصا التحكم الافتراضية والركض التلقائي وسقف دقة البكسل (1.5) وجودة منخفضة افتراضياً', () => {
+  // منطقة ميتة في مركز عصا التحكم
+  const dead = computeJoystickInput(3, -3, 50);
+  assert.equal(dead.moveX, 0);
+  assert.equal(dead.moveZ, 0);
+  assert.equal(dead.autoSprint, false);
+
+  // الدفع للأمام بقوة حتى الحافة يفعّل الركض التلقائي ويقيّد المقبض داخل نصف القطر
+  const sprintFwd = computeJoystickInput(0, -80, 50);
+  assert.ok(Math.abs(sprintFwd.moveX) < 1e-6);
+  assert.ok(Math.abs(sprintFwd.moveZ - 1) < 1e-6);
+  assert.ok(Math.abs(sprintFwd.knobY + 50) < 1e-6);
+  assert.equal(sprintFwd.autoSprint, true);
+
+  // الدفع للخلف بقوة لا يفعّل الركض التلقائي
+  const back = computeJoystickInput(0, 80, 50);
+  assert.equal(back.moveZ, -1);
+  assert.equal(back.autoSprint, false);
+
+  // الدفع الجانبي المتوسط يعطي حركة تناظرية بدون ركض
+  const midRight = computeJoystickInput(25, 0, 50);
+  assert.ok(midRight.moveX > 0.3 && midRight.moveX < 0.7);
+  assert.equal(midRight.autoSprint, false);
+
+  // سقف devicePixelRatio: على الجوال لا يتجاوز 1.5 أبداً
+  assert.equal(computeEffectivePixelRatio(3, 'high', true, false), 1.5);
+  assert.equal(computeEffectivePixelRatio(3, 'low', true, false), 1.25);
+  assert.equal(computeEffectivePixelRatio(1, 'high', true, false), 1);
+  // على الحاسوب: حتى 2 للجودة العالية و1 للمنخفضة أو Software WebGL
+  assert.equal(computeEffectivePixelRatio(3, 'high', false, false), 2);
+  assert.equal(computeEffectivePixelRatio(2, 'low', false, false), 1);
+  assert.equal(computeEffectivePixelRatio(3, 'high', false, true), 1);
+
+  // الإعدادات الافتراضية على الأجهزة اللمسية تختار الجودة المنخفضة تلقائياً
+  const mobileDefaults = loadSettings(true);
+  assert.equal(mobileDefaults.quality, 'low');
+  assert.equal(mobileDefaults.touchSensitivity, DEFAULT_SETTINGS.touchSensitivity);
+  assert.equal(mobileDefaults.touchButtonSize, 'medium');
+
+  const desktopDefaults = loadSettings(false);
+  assert.equal(desktopDefaults.quality, 'high');
 });

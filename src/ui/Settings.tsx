@@ -1,8 +1,16 @@
 import { useGameStore } from '../game/store';
+import type { TouchButtonSize } from '../game/types';
 
 /* ==========================================
-   نافذة الإعدادات — حساسية الماوس، مستوى الصوت، الكتم، وجودة الرسوميات (عالية/منخفضة)
+   نافذة الإعدادات — حساسية الماوس، إعدادات اللمس، مستوى الصوت، الكتم،
+   جودة الرسوميات (عالية/منخفضة)، وفيزياء الرصاص الواقعية
    ========================================== */
+
+const TOUCH_SIZE_OPTIONS: { id: TouchButtonSize; label: string }[] = [
+  { id: 'small', label: 'صغير' },
+  { id: 'medium', label: 'متوسط' },
+  { id: 'large', label: 'كبير' },
+];
 
 export function Settings() {
   const settingsOpen = useGameStore((s) => s.settingsOpen);
@@ -14,17 +22,17 @@ export function Settings() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 p-3 sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-label="إعدادات اللعبة"
     >
       <div
         data-ui-interactive="true"
-        className="w-full max-w-md rounded-xl bg-slate-900 border border-sky-500/40 p-6 shadow-2xl flex flex-col gap-5"
+        className="w-full max-w-md max-h-[92vh] overflow-y-auto touch-scroll rounded-xl bg-slate-900 border border-sky-500/40 p-5 sm:p-6 shadow-2xl flex flex-col gap-4"
       >
         <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-          <h2 className="text-2xl font-black text-slate-50">الإعدادات</h2>
+          <h2 className="text-xl sm:text-2xl font-black text-slate-50">الإعدادات</h2>
           <button
             type="button"
             onClick={() => setSettingsOpen(false)}
@@ -55,8 +63,53 @@ export function Settings() {
           />
         </div>
 
+        {/* إعدادات الجوال واللمس: حساسية اللمس وحجم الأزرار */}
+        <div className="flex flex-col gap-3 pt-2 border-t border-slate-800/80">
+          <div className="text-xs font-extrabold text-sky-400">إعدادات الجوال واللمس</div>
+
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between text-sm font-bold">
+              <label htmlFor="touch-sensitivity-slider" className="text-slate-200">
+                حساسية اللمس
+              </label>
+              <span className="text-sky-400 hud-nums">{settings.touchSensitivity.toFixed(1)}</span>
+            </div>
+            <input
+              id="touch-sensitivity-slider"
+              type="range"
+              min={0.4}
+              max={3.0}
+              step={0.1}
+              value={settings.touchSensitivity}
+              onChange={(e) => updateSettings({ touchSensitivity: parseFloat(e.target.value) })}
+              className="w-full"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-bold text-slate-200">حجم أزرار اللمس</span>
+            <div className="grid grid-cols-3 gap-2">
+              {TOUCH_SIZE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  data-touch-size={opt.id}
+                  onClick={() => updateSettings({ touchButtonSize: opt.id })}
+                  className={`py-2 rounded-lg border text-xs sm:text-sm font-extrabold cursor-pointer transition-colors ${
+                    settings.touchButtonSize === opt.id
+                      ? 'bg-sky-500/20 border-sky-400 text-sky-300'
+                      : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
         {/* مستوى الصوت والكتم */}
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2 pt-2 border-t border-slate-800/80">
           <div className="flex items-center justify-between text-sm font-bold">
             <label htmlFor="volume-slider" className="text-slate-200">
               مستوى الصوت
@@ -93,7 +146,7 @@ export function Settings() {
         </div>
 
         {/* جودة الرسوميات */}
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2 pt-2 border-t border-slate-800/80">
           <span className="text-sm font-bold text-slate-200">جودة الرسوميات</span>
           <div className="grid grid-cols-2 gap-2.5">
             <button
@@ -122,7 +175,7 @@ export function Settings() {
         </div>
 
         {/* فيزياء الرصاص الواقعية للقناصات (معطّلة افتراضياً) */}
-        <div className="flex flex-col gap-1.5 pt-1 border-t border-slate-800/80">
+        <div className="flex flex-col gap-1.5 pt-2 border-t border-slate-800/80">
           <div className="flex items-center justify-between gap-3">
             <div>
               <span className="block text-sm font-bold text-slate-200">

@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { GameEngine } from './game/Engine';
 import { MainMenu } from './ui/MainMenu';
 import { HUD } from './ui/HUD';
+import { MobileControls } from './ui/MobileControls';
 import { Pause } from './ui/Pause';
 import { UpgradePicker } from './ui/UpgradePicker';
 import { GameOver } from './ui/GameOver';
@@ -37,6 +38,7 @@ export default function App() {
       {/* طبقات واجهة المستخدم التفاعلية بالعربية */}
       <MainMenu />
       <HUD />
+      <MobileControls />
       <Pause />
       <UpgradePicker />
       <GameOver />

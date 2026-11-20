@@ -10,6 +10,7 @@ import { useGameStore } from '../game/store';
 export function Radar() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const empDisabledTimer = useGameStore((s) => s.empDisabledTimer);
+  const isTouchDevice = useGameStore((s) => s.isTouchDevice);
   const isJammed = empDisabledTimer > 0;
 
   useEffect(() => {
@@ -179,7 +180,9 @@ export function Radar() {
 
   return (
     <div
-      className={`relative w-[152px] h-[152px] rounded-full bg-slate-950/88 border-2 overflow-hidden ${
+      className={`relative shrink-0 rounded-full bg-slate-950/88 border-2 overflow-hidden ${
+        isTouchDevice ? 'w-[84px] h-[84px]' : 'w-[152px] h-[152px]'
+      } ${
         isJammed
           ? 'border-fuchsia-400 shadow-[0_0_22px_rgba(192,132,252,0.45)]'
           : 'border-sky-400/70 shadow-[0_0_20px_rgba(56,189,248,0.22)]'
@@ -188,10 +191,14 @@ export function Radar() {
     >
       <canvas ref={canvasRef} width={156} height={156} className="block w-full h-full" />
       {isJammed && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/65 text-center px-2">
-          <span className="text-xs font-black text-fuchsia-300">⚡ تشويش EMP</span>
-          <span className="text-[11px] font-bold text-slate-200 mt-0.5">الرادار معطّل</span>
-          <span className="text-xs font-black text-fuchsia-200 hud-nums mt-0.5">
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/65 text-center px-1.5">
+          <span className={`${isTouchDevice ? 'text-[9px]' : 'text-xs'} font-black text-fuchsia-300`}>
+            ⚡ EMP
+          </span>
+          {!isTouchDevice && (
+            <span className="text-[11px] font-bold text-slate-200 mt-0.5">الرادار معطّل</span>
+          )}
+          <span className={`${isTouchDevice ? 'text-[10px]' : 'text-xs'} font-black text-fuchsia-200 hud-nums mt-0.5`}>
             {empDisabledTimer.toFixed(1)}ث
           </span>
         </div>

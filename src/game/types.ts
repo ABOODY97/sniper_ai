@@ -271,8 +271,21 @@ export interface RadarSnapshot {
   entities: RadarEntity[];
 }
 
+export type TouchButtonSize = 'small' | 'medium' | 'large';
+
+export interface MoveInputState {
+  /** محور الحركة الجانبي (-1 يسار .. +1 يمين) */
+  moveX: number;
+  /** محور الحركة الأمامي (-1 خلف .. +1 أمام) */
+  moveZ: number;
+  /** طلب الركض السريع (Shift أو دفع عصا اللمس للحافة) */
+  sprint: boolean;
+}
+
 export interface GameSettings {
   sensitivity: number;
+  touchSensitivity: number;
+  touchButtonSize: TouchButtonSize;
   volume: number;
   muted: boolean;
   quality: QualityLevel;

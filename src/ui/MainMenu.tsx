@@ -7,8 +7,34 @@ import { MapSelect } from './MapSelect';
    تخطيط جانبي تكتيكي يترك معظم الساحة ثلاثية الأبعاد الحية مرئية بوضوح
    ========================================== */
 
+function toggleFullscreenMenu(): void {
+  try {
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element | null;
+      webkitExitFullscreen?: () => Promise<void> | void;
+    };
+    const el = document.documentElement as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    };
+    if (doc.fullscreenElement || doc.webkitFullscreenElement) {
+      if (typeof doc.exitFullscreen === 'function') {
+        doc.exitFullscreen().catch(() => {});
+      } else if (typeof doc.webkitExitFullscreen === 'function') {
+        doc.webkitExitFullscreen();
+      }
+    } else if (typeof el.requestFullscreen === 'function') {
+      el.requestFullscreen().catch(() => {});
+    } else if (typeof el.webkitRequestFullscreen === 'function') {
+      el.webkitRequestFullscreen();
+    }
+  } catch {
+    // تجاهل
+  }
+}
+
 export function MainMenu() {
   const screen = useGameStore((s) => s.screen);
+  const isTouchDevice = useGameStore((s) => s.isTouchDevice);
   const selectedMode = useGameStore((s) => s.selectedMode);
   const setSelectedMode = useGameStore((s) => s.setSelectedMode);
   const selectedMap = useGameStore((s) => s.selectedMap);
@@ -24,7 +50,7 @@ export function MainMenu() {
   const isBossRush = selectedMode === 'boss_rush';
 
   return (
-    <div className="fixed inset-0 z-20 pointer-events-none flex flex-col justify-between p-5 sm:p-8">
+    <div className="fixed inset-0 z-20 pointer-events-none flex flex-col justify-between p-3 sm:p-8">
       {/* تدرج خفيف على الجانب الأيمن لضمان تباين القراءة فوق العالم ثلاثي الأبعاد */}
       <div
         className="fixed inset-0 -z-10 pointer-events-none"
@@ -34,11 +60,11 @@ export function MainMenu() {
         }}
       />
 
-      {/* اللوحة الرئيسية على اليمين (RTL) */}
-      <div className="flex-1 flex items-center justify-start">
+      {/* اللوحة الرئيسية على اليمين (RTL) مع دعم التمرير على شاشات الجوال الأفقية القصيرة */}
+      <div className="flex-1 min-h-0 flex items-center justify-start">
         <div
           data-ui-interactive="true"
-          className="pointer-events-auto w-full max-w-[540px] flex flex-col gap-3.5 bg-slate-950/90 border border-sky-500/35 rounded-xl p-5 shadow-[0_20px_50px_rgba(0,0,0,0.65)]"
+          className="pointer-events-auto w-full max-w-[540px] max-h-full overflow-y-auto touch-scroll flex flex-col gap-3 sm:gap-3.5 bg-slate-950/90 border border-sky-500/35 rounded-xl p-4 sm:p-5 shadow-[0_20px_50px_rgba(0,0,0,0.65)]"
         >
           {/* شعار SVG مخصص متكامل مع هوية اللعبة */}
           <div className="flex items-center gap-3.5 border-b border-slate-800 pb-3.5">
@@ -146,12 +172,12 @@ export function MainMenu() {
           <MapSelect />
 
           {/* أزرار الإجراء الأساسية */}
-          <div className="flex items-center gap-2.5 pt-1">
+          <div className="flex items-center gap-2 pt-1">
             <button
               type="button"
               data-start="true"
               onClick={() => engineActions?.startMission(selectedMap, selectedMode)}
-              className={`flex-1 py-3 px-5 rounded-lg font-black text-lg transition-colors cursor-pointer ${
+              className={`flex-1 py-2.5 sm:py-3 px-4 sm:px-5 rounded-lg font-black text-base sm:text-lg transition-colors cursor-pointer ${
                 isBossRush
                   ? 'bg-red-500 hover:bg-red-400 active:bg-red-600 text-slate-950 shadow-[0_0_24px_rgba(239,68,68,0.4)]'
                   : 'bg-sky-500 hover:bg-sky-400 active:bg-sky-600 text-slate-950 shadow-[0_0_24px_rgba(56,189,248,0.35)]'
@@ -161,18 +187,30 @@ export function MainMenu() {
             </button>
             <button
               type="button"
+              data-testid="menu-settings-btn"
               onClick={() => setSettingsOpen(true)}
-              className="py-3 px-4 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-100 font-bold text-sm transition-colors cursor-pointer"
+              className="py-2.5 sm:py-3 px-3.5 sm:px-4 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-100 font-bold text-xs sm:text-sm transition-colors cursor-pointer"
             >
               الإعدادات
+            </button>
+            <button
+              type="button"
+              data-testid="menu-fullscreen-btn"
+              onClick={toggleFullscreenMenu}
+              title="ملء الشاشة"
+              className="py-2.5 sm:py-3 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-sky-300 font-bold text-xs sm:text-sm transition-colors cursor-pointer shrink-0"
+            >
+              ملء الشاشة
             </button>
           </div>
         </div>
       </div>
 
       {/* سطر تلميحات التحكم المسطح أسفل الشاشة */}
-      <div className="text-center text-xs font-bold text-slate-300/90 hud-text-stroke">
-        WASD حركة · Shift ركض · C تزحلق · Q اندفاع · Space قفز · G قنبلة · R تلقيم · 1-9 أسلحة · Esc إيقاف مؤقت
+      <div className="text-center text-[11px] sm:text-xs font-bold text-slate-300/90 hud-text-stroke pt-1">
+        {isTouchDevice
+          ? 'عصا يسار للحركة والركض التلقائي · سحب يمين للنظر · أزرار اللمس للإطلاق والتصويب والقفز والتزحلق والاندفاع'
+          : 'WASD حركة · Shift ركض · C تزحلق · Q اندفاع · Space قفز · G قنبلة · R تلقيم · 1-9 أسلحة · Esc إيقاف مؤقت'}
       </div>
     </div>
   );

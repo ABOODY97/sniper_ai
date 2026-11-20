@@ -18,9 +18,11 @@ import {
   computeBossRushScaling,
   computeComboMultiplier,
   computeEffectiveGravity,
+  computeEffectivePixelRatio,
   computeHitDamage,
   computeKillPoints,
   computeWaveEnemyCount,
+  detectTouchDevice,
   getKillStreakReward,
   isPointInFlameCone,
   pickBossRushArchetype,
@@ -40,6 +42,7 @@ import { EnemyManager, type EnemySpawnModifiers } from './enemies/EnemyManager';
 import type { EnemyBase, EnemyHitUserData } from './enemies/EnemyBase';
 import { BossEnemy } from './boss/Boss';
 import { Player } from './Player';
+import { InputManager } from './input/InputManager';
 
 /* ==========================================
    محرك اللعبة الرئيسي (Engine)
@@ -113,6 +116,7 @@ function detectSoftwareWebGL(): boolean {
 export class GameEngine {
   private readonly container: HTMLElement;
   private readonly isSoftwareGl: boolean;
+  private readonly isTouchDevice: boolean;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.PerspectiveCamera;
@@ -126,6 +130,7 @@ export class GameEngine {
   private readonly weaponManager: WeaponManager;
   private readonly enemyManager: EnemyManager;
   private readonly player: Player;
+  private readonly inputManager: InputManager;
 
   // كائنات ديناميكية
   private readonly playerRockets: PlayerRocket[] = [];
@@ -146,10 +151,7 @@ export class GameEngine {
   private tourAngle = 0;
   private hudSyncTimer = 0;
 
-  // حالة الإدخال والانتقال الموحّد للتصويب (ADS)
-  private readonly keys: Record<string, boolean> = {};
-  private isMouseDown = false;
-  private isADS = false;
+  // حالة الانتقال الموحّد للتصويب (ADS) وحالة قفل المؤشر
   private adsBlend = 0;
   private hipFovCurrent: number = PLAYER_CONSTANTS.BASE_HIP_FOV;
   private adsFovCurrent = 56;
@@ -203,22 +205,13 @@ export class GameEngine {
   // بيانات الرادار المعاد استخدامها
   private readonly radarEntities: RadarEntity[] = [];
 
-  // مراجع دوال الأحداث لإزالتها نظيفاً عند التخلص
+  // مرجع دالة تغيير حجم الشاشة واتجاهها لإزالتها نظيفاً عند التخلص
   private readonly onResizeBound: () => void;
-  private readonly onKeyDownBound: (e: KeyboardEvent) => void;
-  private readonly onKeyUpBound: (e: KeyboardEvent) => void;
-  private readonly onMouseMoveBound: (e: MouseEvent) => void;
-  private readonly onMouseDownBound: (e: MouseEvent) => void;
-  private readonly onMouseUpBound: (e: MouseEvent) => void;
-  private readonly onWheelBound: (e: WheelEvent) => void;
-  private readonly onContextMenuBound: (e: MouseEvent) => void;
-  private readonly onPointerLockChangeBound: () => void;
-  private readonly onWindowBlurBound: () => void;
-  private readonly onVisibilityChangeBound: () => void;
 
   constructor(container: HTMLElement) {
     this.container = container;
     this.isSoftwareGl = detectSoftwareWebGL();
+    this.isTouchDevice = useGameStore.getState().isTouchDevice || detectTouchDevice();
 
     // تهيئة المشهد والكاميرا
     this.scene = new THREE.Scene();
@@ -362,7 +355,78 @@ export class GameEngine {
       },
     ];
 
-    // ربط الجسر بمخزن Zustand
+    // تهيئة مدير الإدخال الموحّد (لوحة المفاتيح والماوس + اللمس)
+    this.inputManager = new InputManager(this.renderer.domElement, this.isTouchDevice, {
+      isPlaying: () => this.isPlaying,
+      isTitleScreen: () => useGameStore.getState().screen === 'title',
+      isSettingsOpen: () => useGameStore.getState().settingsOpen,
+      isPausedScreen: () => useGameStore.getState().screen === 'paused',
+      isScopedSniper: () => {
+        const w = this.weaponManager.current;
+        const activeADS = this.inputManager.isADS && !this.player.isSprinting;
+        return (
+          this.empDisabledTimer <= 0 &&
+          activeADS &&
+          w.isSniperWeapon() &&
+          !this.weaponManager.isReloading
+        );
+      },
+      onStartFromTitle: () => {
+        const st = useGameStore.getState();
+        this.startMission(st.selectedMap, true, 1, st.selectedMode);
+      },
+      onCloseSettings: () => useGameStore.getState().setSettingsOpen(false),
+      onPauseMission: () => this.pauseMission(),
+      onResumeMission: () => this.resumeMission(),
+      onToggleMute: () => {
+        const st = useGameStore.getState();
+        st.updateSettings({ muted: !st.settings.muted });
+      },
+      onLook: (dx, dy, source) => this.handleLookInput(dx, dy, source),
+      onFirePress: () => {
+        this.audio.init();
+        this.fireWeapon();
+      },
+      onAdsActivated: () => {
+        this.audio.init();
+        this.player.isSprinting = false;
+      },
+      onJump: () => {
+        this.audio.init();
+        this.player.requestJump(this.audio);
+      },
+      onSlide: () => {
+        this.audio.init();
+        this.player.triggerSlide(
+          this.inputManager.getMoveInput(),
+          this.audio,
+          this.weaponManager.isMovementRestricted(),
+        );
+      },
+      onDash: () => {
+        this.audio.init();
+        this.player.triggerDash(
+          this.inputManager.getMoveInput(),
+          this.audio,
+          this.weaponManager.isMovementRestricted(),
+        );
+      },
+      onGrenade: () => {
+        this.audio.init();
+        this.throwGrenade();
+      },
+      onReload: () => this.handleReloadInput(),
+      onSwitchWeapon: (index) => this.handleSwitchWeaponInput(index),
+      onCycleWeapon: (step) => this.handleCycleWeaponInput(step),
+      onScopeZoomStep: (delta) => this.handleScopeZoomStepInput(delta),
+      onRequestPointerLock: () => {
+        this.audio.init();
+        this.requestPointerLockSafe();
+      },
+      onPointerLockChange: (locked) => this.handlePointerLockChange(locked),
+    });
+
+    // ربط الجسر بمخزن Zustand بما يشمل أوامر اللمس
     useGameStore.getState().setEngineActions({
       startMission: (mapId, mode) => this.startMission(mapId, true, 1, mode),
       resumeMission: () => this.resumeMission(),
@@ -372,36 +436,17 @@ export class GameEngine {
       previewMap: (mapId) => this.previewMap(mapId),
       selectUpgrade: (id) => this.selectUpgrade(id),
       applySettings: (settings) => this.applySettings(settings),
+      touch: this.inputManager.touchActions,
     });
 
-    // ربط مستمعي الأحداث
+    // ربط مستمع تغيير الحجم واتجاه الشاشة ومزامنة الحالة الأولية
     this.onResizeBound = () => this.handleResize();
-    this.onKeyDownBound = (e) => this.handleKeyDown(e);
-    this.onKeyUpBound = (e) => this.handleKeyUp(e);
-    this.onMouseMoveBound = (e) => this.handleMouseMove(e);
-    this.onMouseDownBound = (e) => this.handleMouseDown(e);
-    this.onMouseUpBound = (e) => this.handleMouseUp(e);
-    this.onWheelBound = (e) => this.handleWheel(e);
-    this.onContextMenuBound = (e) => {
-      if (this.isPlaying) e.preventDefault();
-    };
-    this.onPointerLockChangeBound = () => this.handlePointerLockChange();
-    this.onWindowBlurBound = () => this.clearHeldInputs();
-    this.onVisibilityChangeBound = () => {
-      if (document.hidden) this.clearHeldInputs();
-    };
-
     window.addEventListener('resize', this.onResizeBound);
-    window.addEventListener('keydown', this.onKeyDownBound);
-    window.addEventListener('keyup', this.onKeyUpBound);
-    document.addEventListener('mousemove', this.onMouseMoveBound);
-    document.addEventListener('mousedown', this.onMouseDownBound);
-    document.addEventListener('mouseup', this.onMouseUpBound);
-    document.addEventListener('wheel', this.onWheelBound, { passive: true });
-    document.addEventListener('contextmenu', this.onContextMenuBound);
-    document.addEventListener('pointerlockchange', this.onPointerLockChangeBound);
-    window.addEventListener('blur', this.onWindowBlurBound);
-    document.addEventListener('visibilitychange', this.onVisibilityChangeBound);
+    window.addEventListener('orientationchange', this.onResizeBound);
+    useGameStore.getState().setHudPatch({
+      isTouchDevice: this.isTouchDevice,
+      isPortrait: height > width,
+    });
 
     // تجهيز الشادرز مرة واحدة على بطاقات الرسوميات الحقيقية للمشهدين (العالم وطبقة السلاح)
     if (!this.isSoftwareGl) {
@@ -452,7 +497,7 @@ export class GameEngine {
         useGameStore.getState().updateSettings({ realisticBallistics: true });
       }
       if (params.get('ads') === '1') {
-        this.isADS = true;
+        this.inputManager.setProgrammaticAds(true);
         this.adsBlend = 1;
         const w = this.weaponManager.current;
         this.adsFovCurrent = w.getEffectiveAdsFov(false);
@@ -465,7 +510,7 @@ export class GameEngine {
         this.weaponManager.snapToAdsBlend(0);
       }
       if (params.get('fire') === '1') {
-        this.isMouseDown = true;
+        this.inputManager.setProgrammaticFire(true);
         const activeW = this.weaponManager.current;
         if (activeW instanceof Minigun) {
           activeW.spinProgress = 1.0;
@@ -509,19 +554,20 @@ export class GameEngine {
     }
   }
 
-  /** تطبيق إعدادات الجودة والحساسية والصوت */
+  /** تطبيق إعدادات الجودة والحساسية والصوت مع سقف دقة البكسل على الأجهزة المحمولة */
   public applySettings(settings: GameSettings): void {
     this.audio.setVolume(settings.volume, settings.muted);
     const high = settings.quality === 'high';
     this.pools.setQuality(high);
 
-    if (this.isSoftwareGl) {
-      this.renderer.setPixelRatio(1);
-      this.renderer.shadowMap.enabled = false;
-    } else {
-      this.renderer.setPixelRatio(high ? Math.min(window.devicePixelRatio, 2) : 1);
-      this.renderer.shadowMap.enabled = high;
-    }
+    const dpr = computeEffectivePixelRatio(
+      window.devicePixelRatio || 1,
+      settings.quality,
+      this.isTouchDevice,
+      this.isSoftwareGl,
+    );
+    this.renderer.setPixelRatio(dpr);
+    this.renderer.shadowMap.enabled = !this.isSoftwareGl && high;
   }
 
   /** معاينة الخريطة المختارة في الخلفية الحية لشاشة البداية */
@@ -632,6 +678,8 @@ export class GameEngine {
   }
 
   private requestPointerLockSafe(): void {
+    // منع قفل المؤشر نهائياً على الأجهزة اللمسية
+    if (this.isTouchDevice) return;
     try {
       const target = this.renderer.domElement;
       if (target && typeof target.requestPointerLock === 'function') {
@@ -658,11 +706,7 @@ export class GameEngine {
   }
 
   private clearHeldInputs(): void {
-    for (const k of Object.keys(this.keys)) {
-      this.keys[k] = false;
-    }
-    this.isMouseDown = false;
-    this.isADS = false;
+    this.inputManager.clearAll();
     this.player.isSprinting = false;
   }
 
@@ -1124,7 +1168,7 @@ export class GameEngine {
     this.weaponManager.fireCooldown = cfg.fireRate * this.weaponManager.fireRateMult;
     this.weaponManager.customHint = '';
 
-    const activeADS = this.isADS && !this.player.isSprinting;
+    const activeADS = this.inputManager.isADS && !this.player.isSprinting;
     const isSniper = weapon.isSniperWeapon();
     const bossDamageMult = cfg.bossDamageMult ?? 1.0;
 
@@ -2155,170 +2199,53 @@ export class GameEngine {
   }
 
   /* ==========================================
-     معالجة الإدخال (لوحة المفاتيح والماوس)
+     معالجة أوامر الإدخال الموحّدة (من InputManager) وتغيير حجم الشاشة
      ========================================== */
 
-  private handleKeyDown(e: KeyboardEvent): void {
-    const store = useGameStore.getState();
-
-    // اختصارات شاشة البداية: Enter أو Space تبدأ اللعب فوراً بالوضع المختار
-    if (store.screen === 'title' && !store.settingsOpen) {
-      if (e.code === 'Enter' || e.code === 'Space') {
-        e.preventDefault();
-        this.startMission(store.selectedMap, true, 1, store.selectedMode);
-        return;
-      }
-    }
-
-    // اختصار الإيقاف المؤقت / الاستئناف (Escape أو P)
-    if (e.code === 'Escape' || e.code === 'KeyP') {
-      if (store.settingsOpen) {
-        store.setSettingsOpen(false);
-        return;
-      }
-      if (store.screen === 'playing') {
-        e.preventDefault();
-        this.pauseMission();
-        return;
-      }
-      if (store.screen === 'paused') {
-        e.preventDefault();
-        this.resumeMission();
-        return;
-      }
-    }
-
-    // اختصار كتم الصوت السريع (M)
-    if (e.code === 'KeyM' && !e.repeat) {
-      store.updateSettings({ muted: !store.settings.muted });
-      return;
-    }
-
-    const firstPress = !this.keys[e.code];
-    this.keys[e.code] = true;
+  private handleLookInput(dx: number, dy: number, source: 'mouse' | 'touch'): void {
     if (!this.isPlaying) return;
-    this.audio.init();
-
-    // التزحلق (C أو Ctrl) — ممنوع أثناء دوران الميني غان
-    if (e.code === 'KeyC' || e.code === 'ControlLeft' || e.code === 'ControlRight') {
-      e.preventDefault();
-      if (firstPress) {
-        this.player.triggerSlide(this.keys, this.audio, this.weaponManager.isMovementRestricted());
-      }
-    }
-
-    // القفز (Space) أو قفزة التزحلق المعززة
-    if (e.code === 'Space' && firstPress) {
-      e.preventDefault();
-      this.player.requestJump(this.audio);
-    }
-
-    // الاندفاع السريع (Q) — ممنوع أثناء دوران الميني غان
-    if (e.code === 'KeyQ' && firstPress) {
-      this.player.triggerDash(this.keys, this.audio, this.weaponManager.isMovementRestricted());
-    }
-
-    // رمي قنبلة يدوية (G)
-    if (e.code === 'KeyG' && firstPress) {
-      this.throwGrenade();
-    }
-
-    // إعادة التلقيم (R)
-    if (e.code === 'KeyR' && firstPress) {
-      if (this.weaponManager.startReload()) {
-        this.player.isSprinting = false;
-        this.audio.play('reload');
-        this.syncWeaponHud();
-      }
-    }
-
-    // تبديل الأسلحة بالأرقام 1-9
-    if (firstPress && e.code.startsWith('Digit')) {
-      const num = parseInt(e.code.replace('Digit', ''), 10);
-      if (num >= 1 && num <= 9) {
-        const res = this.weaponManager.switchWeapon(num - 1);
-        if (res.switched) {
-          this.adsBlend = 0;
-          this.adsFovCurrent = this.weaponManager.current.getEffectiveAdsFov(
-            this.empDisabledTimer > 0,
-          );
-          this.weaponManager.pivot.visible = true;
-        } else if (res.lockedMessage) {
-          this.audio.play('empty');
-        }
-        this.syncWeaponHud();
-      }
-    }
-  }
-
-  private handleKeyUp(e: KeyboardEvent): void {
-    this.keys[e.code] = false;
-  }
-
-  private handleMouseMove(e: MouseEvent): void {
-    if (!this.isPlaying) return;
-    if (document.pointerLockElement !== this.renderer.domElement) return;
     const settings = useGameStore.getState().settings;
-    const activeADS = this.isADS && !this.player.isSprinting;
-    // تعديل حساسية الماوس تلقائياً بما يتناسب مع مستوى التكبير الحالي (x4 / x8 / x12) ونمط التصويب
+    const activeADS = this.inputManager.isADS && !this.player.isSprinting;
+    // تعديل حساسية النظر تلقائياً بما يتناسب مع مستوى التكبير الحالي (x4 / x8 / x12) ونمط التصويب
     const adsMult = activeADS
       ? this.weaponManager.current.getAdsSensitivityMultiplier(this.camera.fov)
       : 1.0;
-    this.player.look(e.movementX, e.movementY, settings.sensitivity, adsMult);
-    this.weaponManager.addMouseSway(e.movementX, e.movementY);
+    const sens = source === 'touch' ? settings.touchSensitivity * 1.45 : settings.sensitivity;
+    this.player.look(dx, dy, sens, adsMult);
+    this.weaponManager.addMouseSway(dx, dy);
   }
 
-  private handleMouseDown(e: MouseEvent): void {
-    if (!this.isPlaying) return;
-    const target = e.target;
-    if (target instanceof Element && target.closest('button, input, select, [data-ui-interactive="true"]')) {
-      return;
-    }
-
+  private handleReloadInput(): void {
     this.audio.init();
-    if (!document.pointerLockElement) {
-      this.requestPointerLockSafe();
-    }
-
-    if (e.button === 0) {
-      this.isMouseDown = true;
-      this.fireWeapon();
-    } else if (e.button === 2) {
-      this.isADS = true;
+    if (this.weaponManager.startReload()) {
       this.player.isSprinting = false;
+      this.inputManager.clearTouchAds();
+      this.audio.play('reload');
+      this.syncWeaponHud();
     }
   }
 
-  private handleMouseUp(e: MouseEvent): void {
-    if (e.button === 0) this.isMouseDown = false;
-    if (e.button === 2) this.isADS = false;
+  private handleSwitchWeaponInput(index: number): void {
+    this.audio.init();
+    const res = this.weaponManager.switchWeapon(index);
+    if (res.switched) {
+      this.adsBlend = 0;
+      this.inputManager.clearTouchAds();
+      this.adsFovCurrent = this.weaponManager.current.getEffectiveAdsFov(
+        this.empDisabledTimer > 0,
+      );
+      this.weaponManager.pivot.visible = true;
+    } else if (res.lockedMessage) {
+      this.audio.play('empty');
+    }
+    this.syncWeaponHud();
   }
 
-  private handleWheel(e: WheelEvent): void {
-    if (!this.isPlaying) return;
-    const w = this.weaponManager.current;
-    const activeADS = this.isADS && !this.player.isSprinting;
-    const isScopedSniper =
-      this.empDisabledTimer <= 0 &&
-      activeADS &&
-      w.isSniperWeapon() &&
-      !this.weaponManager.isReloading;
-
-    // أثناء التصويب بمنظار القناصة: عجلة الماوس تغيّر مستوى التكبير (x4 / x8 / x12) بدلاً من تبديل السلاح
-    if (isScopedSniper) {
-      const zoomDelta = e.deltaY < 0 ? 1 : -1;
-      if (w.stepZoom(zoomDelta)) {
-        this.audio.play('step');
-        useGameStore.getState().setHudPatch({
-          scopeZoomLabel: w.getZoomLabel(),
-        });
-      }
-      return;
-    }
-
-    const step = e.deltaY > 0 ? 1 : -1;
+  private handleCycleWeaponInput(step: 1 | -1): void {
+    this.audio.init();
     if (this.weaponManager.cycleWeapon(step)) {
       this.adsBlend = 0;
+      this.inputManager.clearTouchAds();
       this.adsFovCurrent = this.weaponManager.current.getEffectiveAdsFov(
         this.empDisabledTimer > 0,
       );
@@ -2327,8 +2254,18 @@ export class GameEngine {
     }
   }
 
-  private handlePointerLockChange(): void {
-    const locked = document.pointerLockElement === this.renderer.domElement;
+  private handleScopeZoomStepInput(delta: 1 | -1): void {
+    const w = this.weaponManager.current;
+    if (!w.isSniperWeapon()) return;
+    if (w.stepZoom(delta)) {
+      this.audio.play('step');
+      useGameStore.getState().setHudPatch({
+        scopeZoomLabel: w.getZoomLabel(),
+      });
+    }
+  }
+
+  private handlePointerLockChange(locked: boolean): void {
     if (locked) {
       this.pointerWasLocked = true;
     } else if (this.pointerWasLocked && this.isPlaying) {
@@ -2345,6 +2282,9 @@ export class GameEngine {
     this.weaponCamera.aspect = width / height;
     this.weaponCamera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+    useGameStore.getState().setHudPatch({
+      isPortrait: height > width,
+    });
   }
 
   /* ==========================================
@@ -2376,7 +2316,7 @@ export class GameEngine {
   private syncHudImmediate(): void {
     const w = this.weaponManager.current;
     const resHud = this.weaponManager.getResourceHudState();
-    const activeADS = this.isADS && !this.player.isSprinting;
+    const activeADS = this.inputManager.isADS && !this.player.isSprinting;
     const empActive = this.empDisabledTimer > 0;
     const showScope =
       !empActive &&
@@ -2579,19 +2519,20 @@ export class GameEngine {
       // 0.5 تحديث دوران وحرارة الميني غان قبل حركة اللاعب لتطبيق تقليص السرعة ×0.5 وتقييد الركض/التزحلق/الاندفاع
       const currentWeapon = this.weaponManager.current;
       if (currentWeapon instanceof Minigun) {
-        const wantsSpin = this.isMouseDown || this.isADS;
+        const wantsSpin = this.inputManager.isFiring || this.inputManager.isADS;
         const { playSpinSound } = currentWeapon.updateMinigun(rawDt, wantsSpin);
         if (playSpinSound) {
           this.audio.play('minigunSpin');
         }
       }
 
-      // 1. تحديث اللاعب (الحركة، الركض، التزحلق، الاندفاع، الدرع) مع مراعاة تقييد الميني غان
+      // 1. تحديث اللاعب (الحركة، الركض، التزحلق، الاندفاع، الدرع) من الإدخال الموحّد
+      const moveInput = this.inputManager.getMoveInput();
       const { activeADS } = this.player.update(
         dt,
         rawDt,
-        this.keys,
-        this.isADS,
+        moveInput,
+        this.inputManager.isADS,
         this.weaponManager.isReloading,
         this.mapManager,
         this.pools,
@@ -2644,10 +2585,10 @@ export class GameEngine {
         this.syncWeaponHud();
       }
       if (currentWeapon instanceof Flamethrower) {
-        const wantsFlame = this.isMouseDown && !this.player.isSprinting;
+        const wantsFlame = this.inputManager.isFiring && !this.player.isSprinting;
         const { activeFireDt } = currentWeapon.updateFlamethrower(dt, wantsFlame);
         this.updateFlamethrowerFire(currentWeapon, dt, rawDt, activeFireDt);
-      } else if (this.isMouseDown && wCfg.auto && !this.weaponManager.isReloading) {
+      } else if (this.inputManager.isFiring && wCfg.auto && !this.weaponManager.isReloading) {
         this.fireWeapon();
       }
 
@@ -2673,11 +2614,11 @@ export class GameEngine {
         this.adsBlend > 0.9;
       this.weaponManager.pivot.visible = !showScope;
 
-      const holdingShift = !!(this.keys['ShiftLeft'] || this.keys['ShiftRight']);
+      const holdingBreath = this.inputManager.isHoldingBreath;
       this.player.updateScopeSway(
         rawDt,
         showScope,
-        holdingShift,
+        holdingBreath,
         activeWeapon.getScopeSwayAmplitude(),
       );
 
@@ -2957,16 +2898,8 @@ export class GameEngine {
     if (this.mutatorBannerTimeout !== null) window.clearTimeout(this.mutatorBannerTimeout);
 
     window.removeEventListener('resize', this.onResizeBound);
-    window.removeEventListener('keydown', this.onKeyDownBound);
-    window.removeEventListener('keyup', this.onKeyUpBound);
-    document.removeEventListener('mousemove', this.onMouseMoveBound);
-    document.removeEventListener('mousedown', this.onMouseDownBound);
-    document.removeEventListener('mouseup', this.onMouseUpBound);
-    document.removeEventListener('wheel', this.onWheelBound);
-    document.removeEventListener('contextmenu', this.onContextMenuBound);
-    document.removeEventListener('pointerlockchange', this.onPointerLockChangeBound);
-    window.removeEventListener('blur', this.onWindowBlurBound);
-    document.removeEventListener('visibilitychange', this.onVisibilityChangeBound);
+    window.removeEventListener('orientationchange', this.onResizeBound);
+    this.inputManager.dispose();
 
     this.exitPointerLockSafe();
     this.clearDynamicWorldEntities();

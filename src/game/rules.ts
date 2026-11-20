@@ -6,6 +6,8 @@ import type {
   GameSettings,
   HitZone,
   MapId,
+  QualityLevel,
+  TouchButtonSize,
   WaveMutatorId,
   WaveMutatorInfo,
 } from './types';
@@ -106,11 +108,93 @@ export const STORAGE_KEYS = {
 
 export const DEFAULT_SETTINGS: GameSettings = {
   sensitivity: 1.0,
+  touchSensitivity: 1.2,
+  touchButtonSize: 'medium',
   volume: 0.8,
   muted: false,
   quality: 'high',
   realisticBallistics: false,
 };
+
+/** كشف أجهزة اللمس/الهواتف (مع دعم معامل ?touch=1 أو ?touch=0 للاختبار) */
+export function detectTouchDevice(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const override = params.get('touch');
+    if (override === '1') return true;
+    if (override === '0') return false;
+  } catch {
+    // تجاهل أخطاء قراءة الرابط
+  }
+  const hasTouch =
+    'ontouchstart' in window ||
+    (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0);
+  const coarsePointer =
+    typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  return hasTouch || coarsePointer;
+}
+
+/** حساب معامل دقة البكسل الفعلي (بحد أقصى 1.5 على الجوال للحفاظ على الأداء) */
+export function computeEffectivePixelRatio(
+  devicePixelRatio: number,
+  quality: QualityLevel,
+  isTouchDevice: boolean,
+  isSoftwareGl: boolean,
+): number {
+  if (isSoftwareGl) return 1;
+  const safeDpr = Math.max(1, Number.isFinite(devicePixelRatio) ? devicePixelRatio : 1);
+  if (isTouchDevice) {
+    return quality === 'high' ? Math.min(safeDpr, 1.5) : Math.min(safeDpr, 1.25);
+  }
+  return quality === 'high' ? Math.min(safeDpr, 2) : 1;
+}
+
+export interface JoystickEvaluation {
+  moveX: number;
+  moveZ: number;
+  knobX: number;
+  knobY: number;
+  magnitude: number;
+  autoSprint: boolean;
+}
+
+/** حساب متجه الحركة والركض التلقائي لعصا التحكم الافتراضية اليسرى */
+export function computeJoystickInput(
+  dx: number,
+  dy: number,
+  maxRadius: number,
+  deadzone = 0.14,
+  sprintThreshold = 0.84,
+): JoystickEvaluation {
+  const safeRadius = Math.max(1, maxRadius);
+  const dist = Math.hypot(dx, dy);
+  const clampedDist = Math.min(dist, safeRadius);
+  const ratio = clampedDist / safeRadius;
+
+  const angle = dist > 1e-6 ? Math.atan2(dy, dx) : 0;
+  const knobX = Math.cos(angle) * clampedDist;
+  const knobY = Math.sin(angle) * clampedDist;
+
+  if (ratio <= deadzone) {
+    return { moveX: 0, moveZ: 0, knobX, knobY, magnitude: 0, autoSprint: false };
+  }
+
+  const normalizedMag = Math.min(1, (ratio - deadzone) / (1 - deadzone));
+  const moveX = Math.cos(angle) * normalizedMag;
+  // سحب العصا للأعلى (dy < 0) يعني التقدم للأمام (moveZ > 0)
+  const moveZ = -Math.sin(angle) * normalizedMag;
+  const autoSprint = ratio >= sprintThreshold && moveZ >= 0.55;
+
+  return {
+    moveX,
+    moveZ,
+    knobX,
+    knobY,
+    magnitude: normalizedMag,
+    autoSprint,
+  };
+}
 
 export interface EliteAffixMeta {
   id: EliteAffixId;
@@ -627,24 +711,46 @@ export function saveBossRushRecords(
   return next;
 }
 
-export function loadSettings(): GameSettings {
+export function loadSettings(isTouchOverride?: boolean): GameSettings {
+  const isTouch = isTouchOverride ?? detectTouchDevice();
+  const defaultQuality: QualityLevel = isTouch ? 'low' : DEFAULT_SETTINGS.quality;
+  const baseDefaults: GameSettings = {
+    ...DEFAULT_SETTINGS,
+    quality: defaultQuality,
+  };
+
   try {
-    if (typeof localStorage === 'undefined') return { ...DEFAULT_SETTINGS };
+    if (typeof localStorage === 'undefined') return baseDefaults;
     const raw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-    if (!raw) return { ...DEFAULT_SETTINGS };
+    if (!raw) return baseDefaults;
     const parsed = JSON.parse(raw) as Partial<GameSettings>;
+    const validSizes: TouchButtonSize[] = ['small', 'medium', 'large'];
     return {
-      sensitivity: typeof parsed.sensitivity === 'number' ? Math.max(0.4, Math.min(2.5, parsed.sensitivity)) : DEFAULT_SETTINGS.sensitivity,
-      volume: typeof parsed.volume === 'number' ? Math.max(0, Math.min(1, parsed.volume)) : DEFAULT_SETTINGS.volume,
-      muted: typeof parsed.muted === 'boolean' ? parsed.muted : DEFAULT_SETTINGS.muted,
-      quality: parsed.quality === 'low' ? 'low' : 'high',
+      sensitivity:
+        typeof parsed.sensitivity === 'number'
+          ? Math.max(0.4, Math.min(2.5, parsed.sensitivity))
+          : baseDefaults.sensitivity,
+      touchSensitivity:
+        typeof parsed.touchSensitivity === 'number'
+          ? Math.max(0.4, Math.min(3.0, parsed.touchSensitivity))
+          : baseDefaults.touchSensitivity,
+      touchButtonSize:
+        parsed.touchButtonSize && validSizes.includes(parsed.touchButtonSize)
+          ? parsed.touchButtonSize
+          : baseDefaults.touchButtonSize,
+      volume:
+        typeof parsed.volume === 'number'
+          ? Math.max(0, Math.min(1, parsed.volume))
+          : baseDefaults.volume,
+      muted: typeof parsed.muted === 'boolean' ? parsed.muted : baseDefaults.muted,
+      quality: parsed.quality === 'low' || parsed.quality === 'high' ? parsed.quality : defaultQuality,
       realisticBallistics:
         typeof parsed.realisticBallistics === 'boolean'
           ? parsed.realisticBallistics
-          : DEFAULT_SETTINGS.realisticBallistics,
+          : baseDefaults.realisticBallistics,
     };
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    return baseDefaults;
   }
 }
 
