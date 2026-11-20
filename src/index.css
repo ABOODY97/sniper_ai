@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+/* إعدادات الخط العربي والواجهة الأساسية للعبة */
+@layer base {
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #050811;
+    color: #f8fafc;
+    font-family: 'Cairo', 'Tajawal', 'Segoe UI', Tahoma, sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+}
+
+/* أرقام متناسقة العرض في واجهة اللعب */
+.hud-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* تأثير حدود نصية واضحة للقراءة فوق المشهد ثلاثي الأبعاد */
+.hud-text-stroke {
+  text-shadow: 0 2px 6px rgba(2, 6, 23, 0.92), 0 0 2px rgba(2, 6, 23, 0.95);
+}
+
+/* شريط التمرير في القوائم */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.6);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(56, 189, 248, 0.45);
+  border-radius: 3px;
+}
+
+/* تنسيق عناصر الإدخال من نوع range */
+input[type='range'] {
+  accent-color: #38bdf8;
+  cursor: pointer;
+}
+
+/* حركة انزلاق سلسة لرسائل سجل القتل */
+@keyframes killFeedSlide {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.kill-feed-item {
+  animation: killFeedSlide 0.2s ease-out forwards;
+}

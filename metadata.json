@@ -1,0 +1,6 @@
+{
+  "name": "بروتوكول القنص 3D",
+  "description": "لعبة تصويب ثلاثية الأبعاد من منظور الشخص الأول مع موجات أعداء، زعماء، 7 أسلحة، و3 خرائط تكتيكية.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
