@@ -56,6 +56,7 @@ export class ObjectPools {
   private readonly _zeroScale = new THREE.Vector3(0, 0, 0);
   private readonly _color = new THREE.Color();
   private qualityScale = 1.0;
+  private mapParticleScale = 1.0;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -134,11 +135,17 @@ export class ObjectPools {
     this.qualityScale = high ? 1.0 : 0.45;
   }
 
+  /** ضبط معامل الجزيئات حسب مساحة الخريطة (أقل في الخرائط الكبيرة 150-200 لتحسين الأداء) */
+  public setMapParticleScale(scale: number): void {
+    this.mapParticleScale = Math.max(0.35, Math.min(1.0, scale));
+  }
+
   /** توليد انفجار جزيئات من المجمع الدائري */
   public spawnExplosion(pos: THREE.Vector3, colorHex: number, count: number, speed = 9): void {
-    const actualCount = Math.max(1, Math.round(count * this.qualityScale));
+    const actualCount = Math.max(1, Math.round(count * this.qualityScale * this.mapParticleScale));
     for (let i = 0; i < actualCount; i++) {
-      const p = this.particles[this.particleCursor];
+      const idx = this.particleCursor;
+      const p = this.particles[idx];
       this.particleCursor = (this.particleCursor + 1) % this.maxParticles;
 
       p.active = true;
@@ -152,7 +159,7 @@ export class ObjectPools {
       p.maxLife = 0.32 + Math.random() * 0.25;
       p.life = p.maxLife;
       p.baseScale = 0.85 + Math.random() * 0.55;
-      this.particleMesh.setColorAt(this.particles.indexOf(p), p.color);
+      this.particleMesh.setColorAt(idx, p.color);
     }
     if (this.particleMesh.instanceColor) {
       this.particleMesh.instanceColor.needsUpdate = true;
@@ -167,7 +174,8 @@ export class ObjectPools {
     slideDir: THREE.Vector3,
     colorHex: number,
   ): void {
-    const count = this.qualityScale < 0.7 ? 2 : 3;
+    const effScale = this.qualityScale * this.mapParticleScale;
+    const count = effScale < 0.48 ? 1 : effScale < 0.78 ? 2 : 3;
     for (let i = 0; i < count; i++) {
       const idx = this.particleCursor;
       const p = this.particles[idx];

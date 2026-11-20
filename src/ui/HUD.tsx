@@ -56,6 +56,8 @@ export function HUD() {
   const empDisabledTimer = useGameStore((s) => s.empDisabledTimer);
   const activeMutator = useGameStore((s) => s.activeMutator);
   const mutatorBannerVisible = useGameStore((s) => s.mutatorBannerVisible);
+  const snowstormActive = useGameStore((s) => s.snowstormActive);
+  const mapLowGravity = useGameStore((s) => s.mapLowGravity);
   const killFeed = useGameStore((s) => s.killFeed);
 
   const muted = useGameStore((s) => s.settings.muted);
@@ -107,6 +109,16 @@ export function HUD() {
           boxShadow: 'inset 0 0 110px rgba(192, 132, 252, 0.7)',
           backgroundColor: 'rgba(88, 28, 135, 0.08)',
           opacity: empDisabledTimer > 0 ? 1 : 0,
+        }}
+      />
+
+      {/* تأثير صقيع خفيف على حواف الشاشة أثناء العاصفة الثلجية في الجبل المتجمد */}
+      <div
+        className="fixed inset-0 pointer-events-none transition-opacity duration-500"
+        style={{
+          boxShadow: 'inset 0 0 120px rgba(186, 230, 253, 0.45)',
+          backgroundColor: 'rgba(186, 230, 253, 0.05)',
+          opacity: snowstormActive ? 1 : 0,
         }}
       />
 
@@ -193,6 +205,22 @@ export function HUD() {
                   <span className="block text-[11px] text-slate-400 font-bold">معدِّل الموجة</span>
                   <span className="text-xs sm:text-sm font-black" style={{ color: activeMutator.color }}>
                     🌀 {activeMutator.name}
+                  </span>
+                </div>
+              )}
+              {snowstormActive && (
+                <div className="border-r border-slate-700/80 pr-4">
+                  <span className="block text-[11px] text-slate-400 font-bold">الطقس</span>
+                  <span className="text-xs sm:text-sm font-black text-cyan-200">
+                    ❄️ عاصفة ثلجية
+                  </span>
+                </div>
+              )}
+              {mapLowGravity && !activeMutator && (
+                <div className="border-r border-slate-700/80 pr-4">
+                  <span className="block text-[11px] text-slate-400 font-bold">البيئة</span>
+                  <span className="text-xs sm:text-sm font-black text-indigo-300">
+                    🪐 جاذبية منخفضة
                   </span>
                 </div>
               )}

@@ -13,6 +13,7 @@ import {
   ELITE_AFFIXES,
   PLAYER_CONSTANTS,
   computeComboMultiplier,
+  computeEffectiveGravity,
   computeHitDamage,
   computeKillPoints,
   computeWaveEnemyCount,
@@ -185,7 +186,7 @@ export class GameEngine {
     this.scene = new THREE.Scene();
     const width = container.clientWidth || window.innerWidth;
     const height = container.clientHeight || window.innerHeight;
-    this.camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 320);
+    this.camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 460);
     this.scene.add(this.camera);
 
     // تهيئة المُصيّر مع الحماية ضد software WebGL ومعايرة الألوان السينمائية
@@ -234,6 +235,7 @@ export class GameEngine {
     // تحميل الخريطة الافتراضية لعرضها في الخلفية الحية لشاشة البداية
     const initialMap = useGameStore.getState().selectedMap;
     this.mapManager.loadMap(initialMap);
+    this.pools.setMapParticleScale(this.mapManager.activeMap.particleScale ?? 1.0);
     this.weaponManager.pivot.visible = false;
 
     // قائمة الترقيات (1 من 3 بين الموجات)
@@ -349,8 +351,9 @@ export class GameEngine {
     const params = new URLSearchParams(window.location.search);
     if (params.get('autostart') === '1') {
       const mapParam = params.get('map');
+      const validMaps: MapId[] = ['lab', 'city', 'desert', 'mountain', 'port', 'station'];
       const targetMap: MapId =
-        mapParam === 'city' || mapParam === 'desert' || mapParam === 'lab' ? mapParam : initialMap;
+        mapParam && validMaps.includes(mapParam as MapId) ? (mapParam as MapId) : initialMap;
       const waveParam = parseInt(params.get('wave') || '1', 10);
       const startWaveNum = Number.isFinite(waveParam) && waveParam >= 1 ? waveParam : 1;
       useGameStore.getState().setSelectedMap(targetMap);
@@ -358,7 +361,7 @@ export class GameEngine {
     } else {
       useGameStore.getState().setScreen('title');
       // وضع الكاميرا على زاوية البداية الاستعراضية قبل أول رسم فوري
-      const orbitR = this.mapManager.halfArena * 0.62;
+      const orbitR = Math.min(this.mapManager.halfArena * 0.56, 46);
       this.camera.position.set(orbitR, 14.5, 0);
       this.camera.lookAt(0, 2.2, 0);
     }
@@ -390,9 +393,12 @@ export class GameEngine {
   public previewMap(mapId: MapId): void {
     if (this.mapManager.activeMapId === mapId) return;
     this.mapManager.loadMap(mapId);
+    this.pools.setMapParticleScale(this.mapManager.activeMap.particleScale ?? 1.0);
     useGameStore.getState().setHudPatch({
       activeMap: mapId,
       activeMapName: this.mapManager.activeMap.name,
+      snowstormActive: false,
+      mapLowGravity: (this.mapManager.activeMap.gravityMult ?? 1.0) < 1.0,
     });
   }
 
@@ -515,7 +521,9 @@ export class GameEngine {
   private resetRun(mapId: MapId, initialWave = 1): void {
     this.clearDynamicWorldEntities();
     this.mapManager.loadMap(mapId);
+    this.pools.setMapParticleScale(this.mapManager.activeMap.particleScale ?? 1.0);
     this.player.reset();
+    this.player.gravityMult = computeEffectiveGravity(this.mapManager.activeMap.gravityMult, false);
     this.weaponManager.reset();
     this.weaponManager.pivot.visible = true;
 
@@ -556,6 +564,8 @@ export class GameEngine {
       empDisabledTimer: 0,
       activeMutator: null,
       mutatorBannerVisible: false,
+      snowstormActive: false,
+      mapLowGravity: (this.mapManager.activeMap.gravityMult ?? 1.0) < 1.0,
       slowMoActive: false,
       damageFlash: false,
       showScope: false,
@@ -628,10 +638,10 @@ export class GameEngine {
   }
 
   private applyWaveMutator(mutator: WaveMutatorInfo | null): void {
-    // إعادة ضبط تأثيرات معدِّل الموجة السابقة قبل تطبيق المعدِّل الجديد
+    // إعادة ضبط تأثيرات معدِّل الموجة السابقة مع الحفاظ على جاذبية الخريطة الأساسية
     this.activeMutator = mutator;
     this.mapManager.setFogMultiplier(1.0);
-    this.player.gravityMult = 1.0;
+    this.player.gravityMult = computeEffectiveGravity(this.mapManager.activeMap.gravityMult, false);
     this.headshotDamageMult = 1.0;
     this.waveSpawnModifiers = undefined;
 
@@ -653,7 +663,10 @@ export class GameEngine {
         this.mapManager.setFogMultiplier(2.8, 0.048);
         break;
       case 'low_gravity':
-        this.player.gravityMult = 0.45;
+        this.player.gravityMult = computeEffectiveGravity(
+          this.mapManager.activeMap.gravityMult,
+          true,
+        );
         break;
       case 'fast_fragile':
         this.waveSpawnModifiers = { speedMult: 1.45, hpMult: 0.6 };
@@ -850,8 +863,8 @@ export class GameEngine {
       }
 
       const hits = _raycaster.intersectObjects(targets, true);
-      // نقطة بعيدة على نفس شعاع الكاميرا في حال لم يُصب الشعاع أي هدف
-      _raycaster.ray.at(180, _endPoint);
+      // نقطة بعيدة على نفس شعاع الكاميرا في حال لم يُصب الشعاع أي هدف (تغطي مدى القنص البعيد في الخرائط 200×200)
+      _raycaster.ray.at(260, _endPoint);
 
       const pierced = new Set<EnemyBase>();
 
@@ -1632,7 +1645,7 @@ export class GameEngine {
     // جولة الكاميرا السينمائية فوق الخريطة الحية في شاشة البداية
     if (screen === 'title') {
       this.tourAngle += rawDt * 0.14;
-      const orbitR = this.mapManager.halfArena * 0.62;
+      const orbitR = Math.min(this.mapManager.halfArena * 0.56, 46);
       this.camera.position.set(
         Math.cos(this.tourAngle) * orbitR,
         14.5 + Math.sin(this.tourAngle * 1.4) * 2.2,
@@ -1641,6 +1654,7 @@ export class GameEngine {
       this.camera.lookAt(0, 2.2, 0);
       this.camera.fov = 65;
       this.camera.updateProjectionMatrix();
+      this.mapManager.updateWeather(rawDt, this.camera.position, false);
       this.renderer.render(this.scene, this.camera);
       this.scheduleNextFrame();
       return;
@@ -1680,6 +1694,25 @@ export class GameEngine {
         this.pools,
         this.audio,
       );
+
+      // تحديث طقس الخريطة (العواصف الثلجية في الجبل المتجمد) ومجال الظلال على الخرائط الكبيرة
+      const weather = this.mapManager.updateWeather(
+        dt,
+        this.camera.position,
+        this.activeMutator?.id === 'heavy_fog',
+      );
+      if (weather.stormStarted) {
+        useGameStore.getState().setHudPatch({ snowstormActive: true });
+        useGameStore
+          .getState()
+          .pushKillFeed('❄️ عاصفة ثلجية تضرب الجبل — انخفاض مدى الرؤية!', false, true);
+      } else if (weather.stormEnded) {
+        useGameStore.getState().setHudPatch({ snowstormActive: false });
+        useGameStore
+          .getState()
+          .pushKillFeed('🌤️ انقشاع العاصفة الثلجية — عودة الرؤية الطبيعية');
+      }
+      this.mapManager.updateShadowFocus(this.camera.position, this.renderer.shadowMap.enabled);
 
       // 2. تحديث السلاح والإطلاق الآلي والتلقيم
       const wCfg = this.weaponManager.current.config;

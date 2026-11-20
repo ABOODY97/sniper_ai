@@ -409,5 +409,32 @@ export function getMapDisplayName(mapId: MapId): string {
       return 'مدينة مدمرة';
     case 'desert':
       return 'صحراء مفتوحة';
+    case 'mountain':
+      return 'الجبل المتجمد';
+    case 'port':
+      return 'الميناء الصناعي';
+    case 'station':
+      return 'المحطة الفضائية';
   }
+}
+
+/** حساب معامل الجاذبية الفعلي بدمج جاذبية الخريطة (مثل المحطة الفضائية) مع معدِّل الجاذبية المنخفضة */
+export function computeEffectiveGravity(
+  mapGravityMult: number | undefined,
+  hasLowGravityMutator: boolean,
+): number {
+  const base = mapGravityMult ?? 1.0;
+  if (!hasLowGravityMutator) return base;
+  return base < 1.0 ? Math.max(0.32, Number((base * 0.72).toFixed(3))) : 0.45;
+}
+
+/** حساب كثافة الضباب الفعلية بدمج الضباب الأساسي وعاصفة الثلج ومعدِّل الضباب الكثيف */
+export function computeEffectiveFogDensity(
+  baseDensity: number,
+  weatherDensity: number | null,
+  hasHeavyFogMutator: boolean,
+): number {
+  const activeBase = weatherDensity !== null ? Math.max(baseDensity, weatherDensity) : baseDensity;
+  if (!hasHeavyFogMutator) return activeBase;
+  return Math.max(activeBase, baseDensity * 2.8, 0.048);
 }

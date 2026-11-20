@@ -173,24 +173,31 @@ export class EnemyManager {
     let ex = 0;
     let ez = 0;
     if (customPos) {
-      ex = customPos.x;
-      ez = customPos.z;
+      const safeLimit = this.mapManager.halfArena - 5;
+      ex = Math.max(-safeLimit, Math.min(safeLimit, customPos.x));
+      ez = Math.max(-safeLimit, Math.min(safeLimit, customPos.z));
     } else {
+      const safeLimit = this.mapManager.halfArena - 7;
       const minSpawnDist =
         type === 'sniper' || type === 'boss'
-          ? Math.min(36, this.mapManager.arenaSize * 0.34)
-          : Math.min(28, this.mapManager.arenaSize * 0.24);
-      const spawnSpan = this.mapManager.arenaSize - 14;
+          ? Math.min(38, this.mapManager.arenaSize * 0.34)
+          : Math.min(26, this.mapManager.arenaSize * 0.24);
+      const maxSpawnDist =
+        type === 'sniper' || type === 'boss'
+          ? Math.min(86, this.mapManager.halfArena * 0.94)
+          : Math.min(64, this.mapManager.halfArena * 0.92);
       let tries = 0;
       do {
-        ex = (Math.random() - 0.5) * spawnSpan;
-        ez = (Math.random() - 0.5) * spawnSpan;
+        const ang = Math.random() * Math.PI * 2;
+        const dist = minSpawnDist + Math.random() * Math.max(8, maxSpawnDist - minSpawnDist);
+        ex = Math.max(-safeLimit, Math.min(safeLimit, playerPos.x + Math.cos(ang) * dist));
+        ez = Math.max(-safeLimit, Math.min(safeLimit, playerPos.z + Math.sin(ang) * dist));
         tries++;
         _tmpPos.set(ex, 1, ez);
       } while (
-        (Math.hypot(ex - playerPos.x, ez - playerPos.z) < minSpawnDist ||
+        (Math.hypot(ex - playerPos.x, ez - playerPos.z) < minSpawnDist * 0.85 ||
           (!enemy.config.flying && this.mapManager.isPointInsideObstacle(_tmpPos))) &&
-        tries < 40
+        tries < 45
       );
     }
 
@@ -299,7 +306,7 @@ export class EnemyManager {
       mesh: ringMesh,
       center: new THREE.Vector3(centerPos.x, 0, centerPos.z),
       radius: 2.0,
-      maxRadius: Math.max(38, this.mapManager.arenaSize * 0.42),
+      maxRadius: Math.min(54, Math.max(38, this.mapManager.arenaSize * 0.36)),
       speed: 22,
       dmg,
       hitPlayer: false,
@@ -349,14 +356,15 @@ export class EnemyManager {
     if (enemy.config.type === 'sniper') {
       this.audio.play('sniperEnemyShot');
       _shotDir.subVectors(enemy.aimTarget, _muzzle).normalize();
-      _farEnd.copy(_muzzle).addScaledVector(_shotDir, 150);
+      const sniperMaxDist = Math.max(150, this.mapManager.arenaSize * 1.15);
+      _farEnd.copy(_muzzle).addScaledVector(_shotDir, sniperMaxDist);
 
       _sniperRay.set(_muzzle, _shotDir);
       _sniperRay.near = 0.1;
-      _sniperRay.far = 150;
+      _sniperRay.far = sniperMaxDist;
       const wallHits = _sniperRay.intersectObjects(this.mapManager.obstacleMeshes, false);
 
-      let maxHitDist = 150;
+      let maxHitDist = sniperMaxDist;
       if (wallHits.length > 0) {
         _farEnd.copy(wallHits[0].point);
         maxHitDist = wallHits[0].distance;
@@ -507,7 +515,8 @@ export class EnemyManager {
             }
           }
         }
-        if (dist < 48) {
+        const droneMaxRange = Math.min(62, Math.max(48, this.mapManager.arenaSize * 0.36));
+        if (dist < droneMaxRange) {
           e.shootTimer -= dt;
           if (e.shootTimer <= 0) {
             this.fireEnemyWeapon(e, playerPos, playerEyeHeight, cb);
@@ -590,9 +599,10 @@ export class EnemyManager {
           }
         } else {
           e.shootTimer -= dt;
+          const sniperEngageRange = Math.min(118, Math.max(80, this.mapManager.arenaSize * 0.62));
           if (
             e.shootTimer <= 0 &&
-            dist < 80 &&
+            dist < sniperEngageRange &&
             hasLineOfSight(_muzzle, playerPos, this.mapManager.obstacleMeshes)
           ) {
             e.aimState = 'aiming';
@@ -615,7 +625,10 @@ export class EnemyManager {
         e.group.position.x -= dirX * 1.6;
         e.group.position.z -= dirZ * 1.6;
       } else if (e.config.shoots) {
-        const maxRange = e.config.type === 'mortar' ? 85 : 54;
+        const maxRange =
+          e.config.type === 'mortar'
+            ? Math.min(102, Math.max(85, this.mapManager.arenaSize * 0.56))
+            : Math.min(66, Math.max(54, this.mapManager.arenaSize * 0.38));
         if (dist < maxRange) {
           e.shootTimer -= dt;
           if (e.shootTimer <= 0) {

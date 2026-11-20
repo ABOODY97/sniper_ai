@@ -31,7 +31,7 @@ export function MainMenu() {
       <div className="flex-1 flex items-center justify-start">
         <div
           data-ui-interactive="true"
-          className="pointer-events-auto w-full max-w-[430px] flex flex-col gap-5 bg-slate-950/90 border border-sky-500/35 rounded-xl p-5 sm:p-6 shadow-[0_20px_50px_rgba(0,0,0,0.65)]"
+          className="pointer-events-auto w-full max-w-[540px] flex flex-col gap-4 bg-slate-950/90 border border-sky-500/35 rounded-xl p-5 shadow-[0_20px_50px_rgba(0,0,0,0.65)]"
         >
           {/* شعار SVG مخصص متكامل مع هوية اللعبة */}
           <div className="flex items-center gap-3.5 border-b border-slate-800 pb-4">

@@ -7,11 +7,14 @@ import {
   computeBossMaxHp,
   computeBossPhase,
   computeComboMultiplier,
+  computeEffectiveFogDensity,
+  computeEffectiveGravity,
   computeHitDamage,
   computeKillPoints,
   computeSlideSpeed,
   computeWaveEnemyCount,
   getKillStreakReward,
+  getMapDisplayName,
   isBulletHittingPlayerHeight,
   pickEnemyTypeForWave,
   pickWaveMutator,
@@ -196,4 +199,24 @@ test('معدِّلات الموجات تبدأ من الموجة 3 وتتكرر 
   assert.equal(m3?.id, 'fast_fragile');
   assert.equal(m4?.id, 'double_headshot');
   assert.equal(m1?.name, WAVE_MUTATORS.heavy_fog.name);
+});
+
+test('أسماء الخرائط الست وحساب الجاذبية المنخفضة وكثافة الضباب أثناء العاصفة الثلجية', () => {
+  assert.equal(getMapDisplayName('lab'), 'المختبر');
+  assert.equal(getMapDisplayName('city'), 'مدينة مدمرة');
+  assert.equal(getMapDisplayName('desert'), 'صحراء مفتوحة');
+  assert.equal(getMapDisplayName('mountain'), 'الجبل المتجمد');
+  assert.equal(getMapDisplayName('port'), 'الميناء الصناعي');
+  assert.equal(getMapDisplayName('station'), 'المحطة الفضائية');
+
+  // الجاذبية: عادية، المحطة الفضائية (0.48)، مع معدِّل الجاذبية المنخفضة
+  assert.equal(computeEffectiveGravity(undefined, false), 1.0);
+  assert.equal(computeEffectiveGravity(0.48, false), 0.48);
+  assert.equal(computeEffectiveGravity(undefined, true), 0.45);
+  assert.ok(computeEffectiveGravity(0.48, true) < 0.45 && computeEffectiveGravity(0.48, true) >= 0.32);
+
+  // الضباب: أساسي، أثناء عاصفة الجبل المتجمد، وأثناء معدِّل الضباب الكثيف
+  assert.equal(computeEffectiveFogDensity(0.005, null, false), 0.005);
+  assert.equal(computeEffectiveFogDensity(0.005, 0.028, false), 0.028);
+  assert.equal(computeEffectiveFogDensity(0.005, 0.028, true), 0.048);
 });

@@ -100,6 +100,8 @@ export interface GameStoreState {
   empDisabledTimer: number;
   activeMutator: WaveMutatorInfo | null;
   mutatorBannerVisible: boolean;
+  snowstormActive: boolean;
+  mapLowGravity: boolean;
   killFeed: KillFeedItem[];
 
   // شاشة الترقيات وشاشة النهاية
@@ -204,6 +206,8 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   empDisabledTimer: 0,
   activeMutator: null,
   mutatorBannerVisible: false,
+  snowstormActive: false,
+  mapLowGravity: false,
   killFeed: [],
 
   upgradeWaveCleared: 1,

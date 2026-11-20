@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 /* ==========================================
-   مولّد الخامات الإجرائية عالية الدقة للخرائط الثلاث
+   مولّد الخامات الإجرائية عالية الدقة لجميع الخرائط الست
    مع ضبط SRGBColorSpace وتصفية Anisotropy وخرائط التضاريس BumpMap
    ========================================== */
 
@@ -12,6 +12,13 @@ export interface MapTextureBundle {
   cityWall: THREE.CanvasTexture;
   desertFloor: THREE.CanvasTexture;
   desertRock: THREE.CanvasTexture;
+  snowFloor: THREE.CanvasTexture;
+  iceRock: THREE.CanvasTexture;
+  portFloor: THREE.CanvasTexture;
+  portWall: THREE.CanvasTexture;
+  containerWall: THREE.CanvasTexture;
+  stationFloor: THREE.CanvasTexture;
+  stationWall: THREE.CanvasTexture;
   microBump: THREE.CanvasTexture;
 }
 
@@ -178,14 +185,160 @@ function createDesertRockCanvas(): HTMLCanvasElement {
   return c;
 }
 
+function createSnowFloorCanvas(): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 256;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#d8e6f2';
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.strokeStyle = 'rgba(148, 179, 209, 0.42)';
+  ctx.lineWidth = 8;
+  for (let y = 20; y < 256; y += 40) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.bezierCurveTo(80, y - 10, 176, y + 10, 256, y);
+    ctx.stroke();
+  }
+  for (let i = 0; i < 420; i++) {
+    ctx.fillStyle = Math.random() > 0.5 ? 'rgba(255, 255, 255, 0.65)' : 'rgba(125, 165, 205, 0.25)';
+    ctx.fillRect(Math.random() * 256, Math.random() * 256, 3, 3);
+  }
+  return c;
+}
+
+function createIceRockCanvas(): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 256;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#4b6178';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let y = 0; y < 256; y += 28) {
+    ctx.fillStyle = (y / 28) % 2 === 0 ? 'rgba(30, 41, 59, 0.42)' : 'rgba(224, 242, 254, 0.28)';
+    ctx.fillRect(0, y, 256, 14);
+  }
+  ctx.fillStyle = 'rgba(241, 245, 249, 0.45)';
+  ctx.fillRect(0, 0, 256, 26);
+  return c;
+}
+
+function createPortFloorCanvas(): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 256;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#27313d';
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.strokeStyle = '#18202a';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(2, 2, 252, 252);
+  ctx.beginPath();
+  ctx.moveTo(128, 0);
+  ctx.lineTo(128, 256);
+  ctx.moveTo(0, 128);
+  ctx.lineTo(256, 128);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(250, 204, 21, 0.32)';
+  ctx.fillRect(10, 122, 52, 10);
+  ctx.fillRect(194, 122, 52, 10);
+  return c;
+}
+
+function createPortWallCanvas(): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 256;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#334155';
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(4, 4, 248, 248);
+  ctx.fillStyle = '#f59e0b';
+  ctx.globalAlpha = 0.65;
+  for (let i = -256; i < 512; i += 36) {
+    ctx.beginPath();
+    ctx.moveTo(i, 256);
+    ctx.lineTo(i + 16, 256);
+    ctx.lineTo(i + 38, 224);
+    ctx.lineTo(i + 22, 224);
+    ctx.fill();
+  }
+  return c;
+}
+
+function createContainerCanvas(): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 256;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#d4d4d8';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let x = 0; x < 256; x += 16) {
+    ctx.fillStyle = (x / 16) % 2 === 0 ? 'rgba(0, 0, 0, 0.18)' : 'rgba(255, 255, 255, 0.12)';
+    ctx.fillRect(x, 14, 8, 228);
+  }
+  ctx.strokeStyle = 'rgba(15, 23, 42, 0.45)';
+  ctx.lineWidth = 8;
+  ctx.strokeRect(4, 4, 248, 248);
+  return c;
+}
+
+function createStationFloorCanvas(): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 256;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#0c1322';
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 5;
+  ctx.strokeRect(4, 4, 248, 248);
+  ctx.strokeStyle = 'rgba(34, 211, 238, 0.32)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(20, 20, 216, 216);
+  ctx.beginPath();
+  ctx.moveTo(20, 128);
+  ctx.lineTo(236, 128);
+  ctx.moveTo(128, 20);
+  ctx.lineTo(128, 236);
+  ctx.stroke();
+  return c;
+}
+
+function createStationWallCanvas(): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 256;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#1f293d';
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = '#2c3b55';
+  ctx.fillRect(14, 14, 228, 102);
+  ctx.fillRect(14, 140, 228, 102);
+  ctx.fillStyle = '#22d3ee';
+  ctx.fillRect(0, 122, 256, 6);
+  ctx.fillStyle = '#818cf8';
+  ctx.fillRect(0, 130, 256, 3);
+  return c;
+}
+
 export function createMapTextures(anisotropy: number): MapTextureBundle {
   return {
     labFloor: finalizeColorTexture(createSciFiFloorCanvas(), anisotropy, 28, 28),
     labWall: finalizeColorTexture(createLabWallCanvas(), anisotropy, 1, 1),
     cityFloor: finalizeColorTexture(createCityFloorCanvas(), anisotropy, 22, 22),
     cityWall: finalizeColorTexture(createCityWallCanvas(), anisotropy, 1, 1),
-    desertFloor: finalizeColorTexture(createDesertFloorCanvas(), anisotropy, 48, 48),
+    desertFloor: finalizeColorTexture(createDesertFloorCanvas(), anisotropy, 58, 58),
     desertRock: finalizeColorTexture(createDesertRockCanvas(), anisotropy, 1, 1),
+    snowFloor: finalizeColorTexture(createSnowFloorCanvas(), anisotropy, 64, 64),
+    iceRock: finalizeColorTexture(createIceRockCanvas(), anisotropy, 1, 1),
+    portFloor: finalizeColorTexture(createPortFloorCanvas(), anisotropy, 36, 36),
+    portWall: finalizeColorTexture(createPortWallCanvas(), anisotropy, 1, 1),
+    containerWall: finalizeColorTexture(createContainerCanvas(), anisotropy, 1, 1),
+    stationFloor: finalizeColorTexture(createStationFloorCanvas(), anisotropy, 26, 26),
+    stationWall: finalizeColorTexture(createStationWallCanvas(), anisotropy, 1, 1),
     microBump: createMicroBumpTexture(anisotropy),
   };
 }

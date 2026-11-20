@@ -6,7 +6,7 @@ import * as THREE from 'three';
 
 export type GameScreenState = 'title' | 'playing' | 'paused' | 'upgrade' | 'gameover';
 
-export type MapId = 'lab' | 'city' | 'desert';
+export type MapId = 'lab' | 'city' | 'desert' | 'mountain' | 'port' | 'station';
 
 export type QualityLevel = 'high' | 'low';
 
@@ -41,6 +41,7 @@ export interface ObstacleBox {
   hx: number;
   hz: number;
   h: number;
+  baseY?: number;
 }
 
 export interface PlatformBox {
@@ -68,6 +69,24 @@ export interface MapLightDef {
   dist: number;
 }
 
+export interface SnowstormConfig {
+  intervalMin: number;
+  intervalMax: number;
+  duration: number;
+  stormFogDensity: number;
+}
+
+export interface ContainerDef {
+  x: number;
+  z: number;
+  w: number;
+  h: number;
+  d: number;
+  baseY?: number;
+  color: number;
+  climbable?: boolean;
+}
+
 export interface MapDefinition {
   id: MapId;
   name: string;
@@ -89,9 +108,13 @@ export interface MapDefinition {
   outdoor?: boolean;
   stars?: boolean;
   sunsetSun?: boolean;
+  gravityMult?: number;
+  particleScale?: number;
+  snowstorm?: SnowstormConfig;
   lights: MapLightDef[];
   layout: [number, number, number, number, number][];
   rooftops: [number, number, number, number, number][];
+  containers?: ContainerDef[];
   ramps: Array<{
     x: number;
     z: number;
