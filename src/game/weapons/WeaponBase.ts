@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { ScopeZoomLevel, SniperBallisticsConfig, WeaponConfig } from '../types';
+import type { ScopeZoomLevel, SniperBallisticsConfig, WeaponConfig, WeaponResourceMode } from '../types';
 import { PLAYER_CONSTANTS, computeZoomSensitivityMultiplier } from '../rules';
 
 /* ==========================================
@@ -11,6 +11,15 @@ export interface WeaponMaterials {
   darkMetal: THREE.MeshStandardMaterial;
   gunMetal: THREE.MeshStandardMaterial;
   matteGrip: THREE.MeshStandardMaterial;
+}
+
+export interface WeaponResourceHudState {
+  mode: WeaponResourceMode;
+  value: number;
+  max: number;
+  overheated: boolean;
+  overheatTimer: number;
+  spinProgress: number;
 }
 
 export abstract class WeaponBase {
@@ -60,10 +69,42 @@ export abstract class WeaponBase {
     this.reserve = this.maxReserve;
   }
 
-  /** إضافة ذخيرة من صناديق الإمداد */
+  /** إضافة ذخيرة أو وقود من صناديق الإمداد (مع احترام الكميات المحدودة للأسلحة الثقيلة) */
   public addAmmo(magsCount = 2): void {
     if (!this.unlocked) return;
+    if (this.config.pickupReserveAmount !== undefined) {
+      const scaled = Math.max(1, Math.round(this.config.pickupReserveAmount * (magsCount / 2)));
+      this.reserve = Math.min(this.maxReserve, this.reserve + scaled);
+      return;
+    }
     this.reserve = Math.min(this.maxReserve, this.reserve + this.magSize * magsCount);
+  }
+
+  /** هل يقيّد السلاح حالياً الركض والتزحلق والاندفاع (مثل الميني غان أثناء الدوران) */
+  public isMovementRestricted(): boolean {
+    return false;
+  }
+
+  /** مضاعف سرعة الحركة الفعلي للسلاح الحالي */
+  public getMoveSpeedMultiplier(): number {
+    return 1.0;
+  }
+
+  /** بيانات شريط المورد (ذخيرة / حرارة / وقود) لواجهة HUD */
+  public getResourceHudState(): WeaponResourceHudState {
+    return {
+      mode: this.config.resourceMode ?? 'ammo',
+      value: this.mag,
+      max: this.magSize,
+      overheated: false,
+      overheatTimer: 0,
+      spinProgress: 0,
+    };
+  }
+
+  /** استدعاء عند إغماد السلاح للتبديل إلى سلاح آخر */
+  public onHolster(): void {
+    // يُعاد تعريفها في الأسلحة ذات حالة الدوران أو التشغيل المستمر
   }
 
   /** التحقق مما إذا كان السلاح من فئة القناصات */

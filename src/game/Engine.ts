@@ -19,6 +19,7 @@ import {
   computeKillPoints,
   computeWaveEnemyCount,
   getKillStreakReward,
+  isPointInFlameCone,
   pickEnemyTypeForWave,
   pickWaveMutator,
   saveRecords,
@@ -28,6 +29,8 @@ import { AudioManager } from './audio/AudioManager';
 import { ObjectPools } from './pools/ObjectPools';
 import { MapManager } from './maps/MapManager';
 import { WeaponManager } from './weapons/WeaponManager';
+import { Minigun } from './weapons/Minigun';
+import { Flamethrower } from './weapons/Flamethrower';
 import { EnemyManager, type EnemySpawnModifiers } from './enemies/EnemyManager';
 import type { EnemyBase, EnemyHitUserData } from './enemies/EnemyBase';
 import { BossEnemy } from './boss/Boss';
@@ -170,6 +173,9 @@ export class GameEngine {
   private waveSpawnModifiers: EnemySpawnModifiers | undefined = undefined;
   private forcedBossArchetype: BossArchetypeId | undefined = undefined;
   private pendingFlyingShowcase = false;
+  private flameAudioCooldown = 0;
+  private flameParticleAccum = 0;
+  private flameHitmarkerCooldown = 0;
 
   // مؤقتات الإشعارات البصرية
   private hitmarkerTimeout: number | null = null;
@@ -411,6 +417,14 @@ export class GameEngine {
         this.camera.updateProjectionMatrix();
         this.weaponManager.pivot.position.copy(w.config.adsPos);
         this.weaponManager.pivot.visible = !w.isSniperWeapon();
+      }
+      if (params.get('fire') === '1') {
+        this.isMouseDown = true;
+        const activeW = this.weaponManager.current;
+        if (activeW instanceof Minigun) {
+          activeW.spinProgress = 1.0;
+          activeW.heat = 46;
+        }
       }
       this.syncHudImmediate();
     } else {
@@ -897,28 +911,55 @@ export class GameEngine {
   private fireWeapon(): void {
     const weapon = this.weaponManager.current;
     const cfg = weapon.config;
-    if (this.weaponManager.fireCooldown > 0 || this.weaponManager.isReloading) return;
-
-    if (weapon.mag <= 0) {
-      this.audio.play('empty');
-      this.weaponManager.fireCooldown = 0.25;
-      if (this.weaponManager.startReload()) {
-        this.player.isSprinting = false;
-        this.audio.play('reload');
-      }
-      this.syncWeaponHud();
+    if (weapon instanceof Flamethrower) {
+      // قاذف اللهب يعمل بتدفق مخروطي مستمر داخل حلقة tick() وليس بطلقات منفصلة
       return;
     }
+    if (this.weaponManager.fireCooldown > 0 || this.weaponManager.isReloading) return;
 
-    weapon.mag--;
+    const isMinigun = weapon instanceof Minigun;
+    let shouldSpawnTracer = true;
+
+    if (isMinigun) {
+      if (weapon.overheated) return;
+      if (weapon.reserve <= 0) {
+        this.audio.play('empty');
+        this.weaponManager.fireCooldown = 0.25;
+        this.syncWeaponHud();
+        return;
+      }
+      // يجب إكمال تحمية الدوران (0.7ث) قبل إطلاق أول رصاصة
+      if (!weapon.isSpunUp()) return;
+
+      const shotMeta = weapon.registerShotFired();
+      shouldSpawnTracer = shotMeta.shouldSpawnTracer;
+      if (shotMeta.overheatedNow) {
+        this.audio.play('minigunOverheat');
+        this.player.camShake = Math.max(this.player.camShake, 0.055);
+      }
+    } else {
+      if (weapon.mag <= 0) {
+        this.audio.play('empty');
+        this.weaponManager.fireCooldown = 0.25;
+        if (this.weaponManager.startReload()) {
+          this.player.isSprinting = false;
+          this.audio.play('reload');
+        }
+        this.syncWeaponHud();
+        return;
+      }
+      weapon.mag--;
+    }
+
     this.weaponManager.fireCooldown = cfg.fireRate * this.weaponManager.fireRateMult;
     this.weaponManager.customHint = '';
 
     const activeADS = this.isADS && !this.player.isSprinting;
     const isSniper = weapon.isSniperWeapon();
+    const bossDamageMult = cfg.bossDamageMult ?? 1.0;
 
     this.weaponManager.muzzleLight.color.setHex(cfg.color);
-    this.weaponManager.muzzleLight.intensity = 5;
+    this.weaponManager.muzzleLight.intensity = isMinigun ? 4.2 : 5;
     this.audio.play(cfg.sfx);
 
     // تحديث مصفوفة الكاميرا قبل أي ارتداد لضمان خروج شعاع الإصابة من مركز الكاميرا
@@ -1008,7 +1049,14 @@ export class GameEngine {
           _endPoint.copy(hit.point);
 
           const rawDmg = data.isHead ? cfg.headDmg : cfg.dmg;
-          const res = this.applyDamageToEnemy(enemy, rawDmg, hit.point, data.hitZone, cfg.color);
+          const res = this.applyDamageToEnemy(
+            enemy,
+            rawDmg,
+            hit.point,
+            data.hitZone,
+            cfg.color,
+            bossDamageMult,
+          );
           if (res.hit) anyHit = true;
           if (res.crit) anyCrit = true;
           if (res.shieldBlock) anyShieldBlock = true;
@@ -1016,21 +1064,29 @@ export class GameEngine {
           if (pierced.size >= maxPierce) break;
         } else {
           _endPoint.copy(hit.point);
-          this.pools.spawnExplosion(hit.point, 0xfbbf24, 4, 5);
+          if (!isMinigun || shouldSpawnTracer) {
+            this.pools.spawnExplosion(hit.point, 0xfbbf24, isMinigun ? 2 : 4, 5);
+          }
           break;
         }
       }
 
-      // خط الأثر البصري يبدأ من الفوهة ويتجه إلى نقطة الإصابة الفعلية التي وجدها شعاع الكاميرا
-      const life = isSniper ? 0.28 : 0.07;
-      this.pools.spawnTracer(_muzzleWorld, _endPoint, cfg.color, life, isSniper ? 1.0 : 0.75);
+      // خط الأثر البصري يبدأ من الفوهة ويتجه إلى نقطة الإصابة الفعلية (كل 3 رصاصات في الميني غان)
+      if (shouldSpawnTracer) {
+        const life = isSniper ? 0.28 : isMinigun ? 0.065 : 0.07;
+        this.pools.spawnTracer(_muzzleWorld, _endPoint, cfg.color, life, isSniper ? 1.0 : 0.8);
+      }
     }
 
     // تطبيق الارتداد بعد اكتمال حساب الإصابة فقط (وصفر تماماً أثناء التصويب بالقناصة)
     const recoilKick = weapon.getEffectiveRecoilKick(activeADS);
     if (recoilKick > 0) {
       this.weaponManager.weaponKickZ = cfg.gunKick;
-      this.player.camShake = Math.max(this.player.camShake, recoilKick * 0.65);
+      const shakeAmt = isMinigun ? Math.max(0.024, recoilKick * 1.15) : recoilKick * 0.65;
+      this.player.camShake = Math.max(this.player.camShake, shakeAmt);
+      if (isMinigun) {
+        this.player.yaw += (Math.random() - 0.5) * 0.008;
+      }
       this.player.pitch = Math.min(Math.PI / 2 - 0.05, this.player.pitch + recoilKick);
       this.player.applyCameraRotation();
     }
@@ -1049,12 +1105,171 @@ export class GameEngine {
     this.syncWeaponHud();
   }
 
+  /** معالجة الإطلاق المخروطي المستمر لقاذف اللهب (مدى 9م، زاوية 60°، فحص جدران، حجب دروع 80%، احتراق 8/ث لـ3ث) */
+  private updateFlamethrowerFire(
+    weapon: Flamethrower,
+    dt: number,
+    rawDt: number,
+    activeFireDt: number,
+  ): void {
+    if (this.flameAudioCooldown > 0) {
+      this.flameAudioCooldown = Math.max(0, this.flameAudioCooldown - rawDt);
+    }
+    if (this.flameHitmarkerCooldown > 0) {
+      this.flameHitmarkerCooldown = Math.max(0, this.flameHitmarkerCooldown - rawDt);
+    }
+    if (activeFireDt <= 0) {
+      this.flameParticleAccum = 0;
+      return;
+    }
+
+    this.camera.updateMatrixWorld(true);
+    this.camera.getWorldPosition(_rayOrigin);
+    this.camera.getWorldDirection(_rayDir);
+    this.weaponManager.getMuzzleWorldPosition(_muzzleWorld);
+
+    // إضاءة برتقالية نابضة واهتزاز خفيف للفوهة أثناء نفث اللهب
+    this.weaponManager.muzzleLight.color.setHex(0xf97316);
+    this.weaponManager.muzzleLight.intensity = 3.8 + Math.random() * 2.4;
+    this.weaponManager.weaponKickZ = Math.max(this.weaponManager.weaponKickZ, 0.015);
+    this.player.camShake = Math.max(this.player.camShake, 0.008);
+
+    // صوت نفث اللهب الإجرائي المتواصل
+    if (this.flameAudioCooldown <= 0) {
+      this.audio.play('flamethrower');
+      this.flameAudioCooldown = 0.14;
+    }
+
+    // توليد جزيئات اللهب المجمعة بمعدل سلس مع احترام السقف الصارم (120 عالي / 48 منخفض)
+    const range = weapon.config.coneRange ?? PLAYER_CONSTANTS.FLAME_RANGE;
+    const coneAngleDeg = weapon.config.coneAngleDeg ?? PLAYER_CONSTANTS.FLAME_CONE_DEG;
+    this.flameParticleAccum += dt * 95;
+    const emitCount = Math.floor(this.flameParticleAccum);
+    if (emitCount > 0) {
+      this.flameParticleAccum -= emitCount;
+      this.pools.spawnFlameConeParticles(
+        _muzzleWorld,
+        _rayDir,
+        Math.min(emitCount, 8),
+        range,
+        coneAngleDeg,
+      );
+    }
+
+    // تطبيق الضرر المباشر (25/ث) + حالة الاحتراق (8/ث لمدة 3ث) على كل عدو داخل المخروط غير محجوب بالجدران
+    const directDps = weapon.config.flameDirectDps ?? PLAYER_CONSTANTS.FLAME_DIRECT_DPS;
+    const directDmg = directDps * activeFireDt;
+    const snapshot = [...this.enemyManager.enemies];
+    let anyHit = false;
+    let anyShieldBlock = false;
+
+    for (const enemy of snapshot) {
+      if (enemy.hp <= 0) continue;
+
+      _tmpVec.copy(enemy.group.position);
+      if (!enemy.config.flying) {
+        _tmpVec.y += 1.15 * enemy.config.scale;
+      }
+
+      if (!isPointInFlameCone(_rayOrigin, _rayDir, _tmpVec, range, coneAngleDeg)) {
+        continue;
+      }
+
+      // فحص حجب الجدران والعوائق بشعاع Raycast لكل هدف
+      _tmpVec2.subVectors(_tmpVec, _rayOrigin);
+      const distToTarget = _tmpVec2.length();
+      if (distToTarget > 0.35) {
+        _tmpVec2.divideScalar(distToTarget);
+        _raycaster.set(_rayOrigin, _tmpVec2);
+        _raycaster.near = 0.1;
+        _raycaster.far = Math.max(0.15, distToTarget - 0.35);
+        const wallHits = _raycaster.intersectObjects(this.mapManager.obstacleMeshes, false);
+        _raycaster.far = Infinity;
+        if (wallHits.length > 0) {
+          continue;
+        }
+      }
+
+      // لا توجد مضاعفة لإصابات الرأس باللهب؛ وتبقى الدروع الأمامية للأعداء المدرَّعين تحجب 80%
+      let hitZone: HitZone = 'body';
+      if (enemy.config.type === 'shielded') {
+        enemy.group.getWorldDirection(_tmpVec2);
+        const toPlayerX = _rayOrigin.x - enemy.group.position.x;
+        const toPlayerZ = _rayOrigin.z - enemy.group.position.z;
+        const horizLen = Math.hypot(toPlayerX, toPlayerZ);
+        if (horizLen > 0.01) {
+          const frontDot = (_tmpVec2.x * toPlayerX + _tmpVec2.z * toPlayerZ) / horizLen;
+          if (frontDot > 0.25) {
+            hitZone = 'shield';
+          }
+        }
+      }
+
+      const res = this.applyDamageToEnemy(
+        enemy,
+        directDmg,
+        _tmpVec,
+        hitZone,
+        0xf97316,
+        1.0,
+        true,
+      );
+      if (res.hit) anyHit = true;
+      if (res.shieldBlock) anyShieldBlock = true;
+
+      // تجديد حالة الاحتراق (3 ثوانٍ، 8 ضرر/ث، دون تكديس — وتكشف الأشباح المحترقة)
+      if (enemy.hp > 0) {
+        enemy.applyBurn(PLAYER_CONSTANTS.BURN_DURATION);
+      }
+    }
+
+    if ((anyHit || anyShieldBlock) && this.flameHitmarkerCooldown <= 0) {
+      this.showHitmarker(false);
+      if (anyShieldBlock && !anyHit) {
+        this.audio.play('shieldBlock');
+      }
+      this.flameHitmarkerCooldown = 0.15;
+    }
+  }
+
+  /** تطبيق ضرر الاحتراق المستمر (8/ث) على العدو المشتعل دون مضاعفة للرأس */
+  private applyBurnDamageToEnemy(enemy: EnemyBase, burnDamage: number): void {
+    if (enemy.hp <= 0 || burnDamage <= 0) return;
+
+    const finalDmg = burnDamage * this.getEffectiveDamageMultiplier();
+    enemy.hp -= finalDmg;
+
+    if (enemy.config.isBoss) {
+      const boss = enemy as BossEnemy;
+      const transition = boss.evaluatePhaseTransition();
+      if (transition.changed && (transition.newPhase === 2 || transition.newPhase === 3)) {
+        this.audio.play('bossRoar');
+        this.hitstopTimer = 0.055;
+        const phaseMsg = boss.getPhaseTransitionMessage(transition.newPhase);
+        const bannerColor = transition.newPhase === 3 ? '#ef4444' : '#f97316';
+        this.showBanner(phaseMsg.banner, bannerColor);
+        useGameStore.getState().pushKillFeed(phaseMsg.feed, true, true);
+        this.summonBossPhaseMinions(boss, transition.newPhase === 2 ? 2 : 3);
+      }
+      this.syncBossHud(boss);
+    } else {
+      enemy.refreshHpBar();
+    }
+
+    if (enemy.hp <= 0) {
+      const dist = this.camera.position.distanceTo(enemy.group.position);
+      this.killEnemy(enemy, false, false, dist, true);
+    }
+  }
+
   private applyDamageToEnemy(
     enemy: EnemyBase,
     rawDmg: number,
     hitPoint: THREE.Vector3,
     hitZone: HitZone,
     weaponColor: number,
+    weaponBossDamageMult = 1.0,
+    silentParticles = false,
   ): { hit: boolean; crit: boolean; shieldBlock: boolean } {
     if (enemy.hp <= 0) return { hit: false, crit: false, shieldBlock: false };
 
@@ -1073,25 +1288,32 @@ export class GameEngine {
       eliteAffix: enemy.eliteAffix,
       headshotMult: this.headshotDamageMult,
       bossShieldActive: enemy.bossShieldActive,
+      weaponBossDamageMult,
     });
 
     if (result.isShieldBlock) {
       enemy.shieldFlashTimer = 0.14;
       if (enemy.shieldMat) enemy.shieldMat.opacity = 0.85;
-      this.pools.spawnExplosion(hitPoint, 0x38bdf8, 6, 6);
+      if (!silentParticles) {
+        this.pools.spawnExplosion(hitPoint, 0x38bdf8, 6, 6);
+      }
     } else if (hitZone === 'generator' || hitZone === 'weakpoint') {
       enemy.flashTimer = 0.08;
       enemy.bodyMat.emissive.setHex(0xffaa00);
-      this.pools.spawnExplosion(hitPoint, 0xfbbf24, 12, 9);
+      if (!silentParticles) {
+        this.pools.spawnExplosion(hitPoint, 0xfbbf24, 12, 9);
+      }
     } else {
       enemy.flashTimer = 0.08;
-      enemy.bodyMat.emissive.setHex(enemy.bossShieldActive ? 0x38bdf8 : 0xffffff);
-      this.pools.spawnExplosion(
-        hitPoint,
-        enemy.bossShieldActive ? 0x38bdf8 : result.isCrit ? 0xfef08a : weaponColor,
-        result.isCrit ? 10 : 5,
-        7,
-      );
+      enemy.bodyMat.emissive.setHex(enemy.bossShieldActive ? 0x38bdf8 : silentParticles ? 0xf97316 : 0xffffff);
+      if (!silentParticles) {
+        this.pools.spawnExplosion(
+          hitPoint,
+          enemy.bossShieldActive ? 0x38bdf8 : result.isCrit ? 0xfef08a : weaponColor,
+          result.isCrit ? 10 : 5,
+          7,
+        );
+      }
     }
 
     enemy.hp -= result.damage;
@@ -1120,6 +1342,7 @@ export class GameEngine {
         hitZone === 'head',
         hitZone === 'generator' || hitZone === 'weakpoint',
         dist,
+        silentParticles,
       );
     }
 
@@ -1431,7 +1654,13 @@ export class GameEngine {
   }
 
   /** معالجة مقتل عدو أو زعيم، الكومبو، سلسلة القتل، اللقطة البطيئة، والغنائم */
-  private killEnemy(enemy: EnemyBase, isHead: boolean, isGenerator: boolean, killDist: number): void {
+  private killEnemy(
+    enemy: EnemyBase,
+    isHead: boolean,
+    isGenerator: boolean,
+    killDist: number,
+    isBurnKill = false,
+  ): void {
     const isBoss = !!enemy.config.isBoss;
     const pos = enemy.group.position.clone();
     pos.y += enemy.config.flying ? 0 : 1.3 * enemy.config.scale;
@@ -1505,6 +1734,10 @@ export class GameEngine {
       useGameStore
         .getState()
         .pushKillFeed(`🏆 تم إسقاط الزعيم (${bossLabel})! +${totalPts}${multTag}`, true, true);
+    } else if (isBurnKill) {
+      useGameStore
+        .getState()
+        .pushKillFeed(`🔥 احتراق وتصفية ${enemyName}${eliteTag} +${totalPts}${multTag}`, false, true);
     } else if (isHead) {
       useGameStore.getState().pushKillFeed(`🎯 إصابة بالرأس (${enemyName}${eliteTag}) +${totalPts}${multTag}`, true);
     } else if (isGenerator) {
@@ -1556,6 +1789,7 @@ export class GameEngine {
 
     if (isBoss) {
       this.bossKills++;
+      const bossArchetype = (enemy as BossEnemy).archetype;
       this.spawnPickup(new THREE.Vector3(dropOrigin.x - 1.8, 0, dropOrigin.z), 'health');
       this.spawnPickup(new THREE.Vector3(dropOrigin.x + 1.8, 0, dropOrigin.z), 'ammo');
 
@@ -1568,18 +1802,21 @@ export class GameEngine {
       }
       this.waveEnemiesRemaining = 0;
 
-      // فتح السلاح التالي من أسلحة الباس (4-7)
-      const unlocked = this.weaponManager.unlockNextBossWeapon();
-      if (unlocked) {
+      // فتح مكافآت الأسلحة الخاصة بالباس (أول باس يفتح M134 ميني غان، ملكة السرب تفتح قاذف اللهب، + أسلحة 4-7)
+      const unlockedList = this.weaponManager.unlockBossKillRewards(bossArchetype, this.bossKills);
+      if (unlockedList.length > 0) {
         this.audio.play('unlock');
-        this.showBanner(`🔓 سلاح جديد: ${unlocked.config.name}!`, '#fde047');
-        useGameStore
-          .getState()
-          .pushKillFeed(
-            `🔓 تم فتح سلاح جديد: ${unlocked.config.name} (مفتاح ${unlocked.config.id + 1})!`,
-            true,
-            true,
-          );
+        const namesJoined = unlockedList.map((u) => u.config.name).join(' + ');
+        this.showBanner(`🔓 سلاح جديد: ${namesJoined}!`, '#fde047');
+        for (const unlocked of unlockedList) {
+          useGameStore
+            .getState()
+            .pushKillFeed(
+              `🔓 تم فتح سلاح جديد: ${unlocked.config.name} (مفتاح ${unlocked.config.id + 1})!`,
+              true,
+              true,
+            );
+        }
       } else {
         this.score += 1500;
         this.showBanner('🏆 انتصار أسطوري! +1500 نقطة إضافية!', '#fde047');
@@ -1716,11 +1953,11 @@ export class GameEngine {
     if (!this.isPlaying) return;
     this.audio.init();
 
-    // التزحلق (C أو Ctrl)
+    // التزحلق (C أو Ctrl) — ممنوع أثناء دوران الميني غان
     if (e.code === 'KeyC' || e.code === 'ControlLeft' || e.code === 'ControlRight') {
       e.preventDefault();
       if (firstPress) {
-        this.player.triggerSlide(this.keys, this.audio);
+        this.player.triggerSlide(this.keys, this.audio, this.weaponManager.isMovementRestricted());
       }
     }
 
@@ -1730,9 +1967,9 @@ export class GameEngine {
       this.player.requestJump(this.audio);
     }
 
-    // الاندفاع السريع (Q)
+    // الاندفاع السريع (Q) — ممنوع أثناء دوران الميني غان
     if (e.code === 'KeyQ' && firstPress) {
-      this.player.triggerDash(this.keys, this.audio);
+      this.player.triggerDash(this.keys, this.audio, this.weaponManager.isMovementRestricted());
     }
 
     // رمي قنبلة يدوية (G)
@@ -1749,10 +1986,10 @@ export class GameEngine {
       }
     }
 
-    // تبديل الأسلحة بالأرقام 1-7
+    // تبديل الأسلحة بالأرقام 1-9
     if (firstPress && e.code.startsWith('Digit')) {
       const num = parseInt(e.code.replace('Digit', ''), 10);
-      if (num >= 1 && num <= 7) {
+      if (num >= 1 && num <= 9) {
         const res = this.weaponManager.switchWeapon(num - 1);
         if (!res.switched && res.lockedMessage) {
           this.audio.play('empty');
@@ -1781,8 +2018,10 @@ export class GameEngine {
 
   private handleMouseDown(e: MouseEvent): void {
     if (!this.isPlaying) return;
-    const target = e.target as HTMLElement | null;
-    if (target && target.closest('button, input, select, [data-ui-interactive="true"]')) return;
+    const target = e.target;
+    if (target instanceof Element && target.closest('button, input, select, [data-ui-interactive="true"]')) {
+      return;
+    }
 
     this.audio.init();
     if (!document.pointerLockElement) {
@@ -1855,13 +2094,20 @@ export class GameEngine {
 
   private syncWeaponHud(): void {
     const w = this.weaponManager.current;
+    const resHud = this.weaponManager.getResourceHudState();
     useGameStore.getState().setHudPatch({
       weaponName: w.config.name,
       weaponRole: w.config.roleHint,
       adsStyle: w.config.adsStyle,
       scopeZoomLabel: w.getZoomLabel(),
-      ammoMag: w.mag,
-      ammoReserve: w.reserve,
+      ammoMag: Math.floor(w.mag),
+      ammoReserve: Math.floor(w.reserve),
+      weaponResourceMode: resHud.mode,
+      weaponGaugeValue: resHud.value,
+      weaponGaugeMax: resHud.max,
+      weaponOverheated: resHud.overheated,
+      weaponOverheatTimer: Number(resHud.overheatTimer.toFixed(1)),
+      weaponSpinProgress: resHud.spinProgress,
       isReloading: this.weaponManager.isReloading,
       reloadHint: this.weaponManager.getReloadHint(),
       weaponSlots: this.weaponManager.getSlotsUI(),
@@ -1870,6 +2116,7 @@ export class GameEngine {
 
   private syncHudImmediate(): void {
     const w = this.weaponManager.current;
+    const resHud = this.weaponManager.getResourceHudState();
     const activeADS = this.isADS && !this.player.isSprinting;
     const empActive = this.empDisabledTimer > 0;
     const showScope = !empActive && activeADS && w.isSniperWeapon() && !this.weaponManager.isReloading;
@@ -1877,12 +2124,16 @@ export class GameEngine {
       (activeADS
         ? w.config.adsStyle === 'tight_choke'
           ? 6
-          : 2
+          : w.config.adsStyle === 'minigun'
+            ? 8
+            : 2
         : this.player.isSprinting
           ? 20
           : this.player.isMoving
-            ? 13
-            : w.config.adsStyle === 'tight_choke'
+            ? w.config.adsStyle === 'minigun'
+              ? 24
+              : 13
+            : w.config.adsStyle === 'tight_choke' || w.config.adsStyle === 'minigun'
               ? 22
               : 7) +
       this.weaponManager.weaponKickZ * 90;
@@ -1914,8 +2165,14 @@ export class GameEngine {
         this.player.holdBreath.remaining / PLAYER_CONSTANTS.HOLD_BREATH_MAX_DURATION,
       holdBreathActive: this.player.holdBreath.isHolding,
       holdBreathCooldown: Number(this.player.holdBreath.cooldown.toFixed(1)),
-      ammoMag: w.mag,
-      ammoReserve: w.reserve,
+      ammoMag: Math.floor(w.mag),
+      ammoReserve: Math.floor(w.reserve),
+      weaponResourceMode: resHud.mode,
+      weaponGaugeValue: resHud.value,
+      weaponGaugeMax: resHud.max,
+      weaponOverheated: resHud.overheated,
+      weaponOverheatTimer: Number(resHud.overheatTimer.toFixed(1)),
+      weaponSpinProgress: resHud.spinProgress,
       isReloading: this.weaponManager.isReloading,
       reloadHint: this.weaponManager.getReloadHint(),
       weaponSlots: this.weaponManager.getSlotsUI(),
@@ -2025,7 +2282,17 @@ export class GameEngine {
         this.empDisabledTimer = Math.max(0, this.empDisabledTimer - rawDt);
       }
 
-      // 1. تحديث اللاعب (الحركة، الركض، التزحلق، الاندفاع، الدرع)
+      // 0.5 تحديث دوران وحرارة الميني غان قبل حركة اللاعب لتطبيق تقليص السرعة ×0.5 وتقييد الركض/التزحلق/الاندفاع
+      const currentWeapon = this.weaponManager.current;
+      if (currentWeapon instanceof Minigun) {
+        const wantsSpin = this.isMouseDown || this.isADS;
+        const { playSpinSound } = currentWeapon.updateMinigun(rawDt, wantsSpin);
+        if (playSpinSound) {
+          this.audio.play('minigunSpin');
+        }
+      }
+
+      // 1. تحديث اللاعب (الحركة، الركض، التزحلق، الاندفاع، الدرع) مع مراعاة تقييد الميني غان
       const { activeADS } = this.player.update(
         dt,
         rawDt,
@@ -2035,6 +2302,8 @@ export class GameEngine {
         this.mapManager,
         this.pools,
         this.audio,
+        this.weaponManager.getMoveSpeedMultiplier(),
+        this.weaponManager.isMovementRestricted(),
       );
 
       // تحديث طقس الخريطة (العواصف الثلجية في الجبل المتجمد) ومجال الظلال على الخرائط الكبيرة
@@ -2056,7 +2325,7 @@ export class GameEngine {
       }
       this.mapManager.updateShadowFocus(this.camera.position, this.renderer.shadowMap.enabled);
 
-      // 2. تحديث السلاح والإطلاق الآلي والتلقيم
+      // 2. تحديث السلاح والإطلاق الآلي والتلقيم وقاذف اللهب المستمر
       const wCfg = this.weaponManager.current.config;
       const { finishedReload } = this.weaponManager.update(
         rawDt,
@@ -2070,7 +2339,11 @@ export class GameEngine {
       if (finishedReload) {
         this.syncWeaponHud();
       }
-      if (this.isMouseDown && wCfg.auto && !this.weaponManager.isReloading) {
+      if (currentWeapon instanceof Flamethrower) {
+        const wantsFlame = this.isMouseDown && !this.player.isSprinting;
+        const { activeFireDt } = currentWeapon.updateFlamethrower(dt, wantsFlame);
+        this.updateFlamethrowerFire(currentWeapon, dt, rawDt, activeFireDt);
+      } else if (this.isMouseDown && wCfg.auto && !this.weaponManager.isReloading) {
         this.fireWeapon();
       }
 
@@ -2189,6 +2462,7 @@ export class GameEngine {
               .getState()
               .pushKillFeed('⚡ تشويش EMP من المشوِّش! (المنظار والرادار معطّلان 3ث)', true, true);
           },
+          onBurnDamage: (enemy, damage) => this.applyBurnDamageToEnemy(enemy, damage),
           syncBossHud: (boss) => this.syncBossHud(boss),
         },
         this.waveSpawnModifiers,

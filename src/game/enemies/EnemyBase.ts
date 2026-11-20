@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { EliteAffixId, EnemyTypeId, HitZone } from '../types';
-import { ELITE_AFFIXES, PLAYER_CONSTANTS } from '../rules';
+import { ELITE_AFFIXES, PLAYER_CONSTANTS, applyBurnStatus } from '../rules';
 
 /* ==========================================
    الفئة الأساسية للأعداء والنماذج ثلاثية الأبعاد والظلال الأرضية
@@ -143,6 +143,10 @@ export abstract class EnemyBase {
 
   // حقول خاصة بالشبح (Ghost)
   public revealTimer = 0;
+
+  // حقول حالة الاحتراق (قاذف اللهب — 8 ضرر/ث لمدة 3 ثوانٍ تُجدَّد دون تكديس)
+  public burnTimer = 0;
+  public burnEmberTimer = 0;
 
   // حقول خاصة بأعداء النخبة (Elite Variants)
   public eliteAffix: EliteAffixId | null = null;
@@ -346,9 +350,17 @@ export abstract class EnemyBase {
     return sprite;
   }
 
-  /** كشف الشبح بالكامل لمدة محددة عند إطلاق النار أو تلقي إصابة */
+  /** كشف الشبح بالكامل لمدة محددة عند إطلاق النار أو تلقي إصابة أو الاحتراق */
   public reveal(duration: number = PLAYER_CONSTANTS.GHOST_REVEAL_DURATION): void {
     this.revealTimer = Math.max(this.revealTimer, duration);
+  }
+
+  /** تطبيق أو تجديد حالة الاحتراق لمدة 3 ثوانٍ دون تكديس */
+  public applyBurn(duration: number = PLAYER_CONSTANTS.BURN_DURATION): void {
+    this.burnTimer = applyBurnStatus(this.burnTimer, duration);
+    if (this.config.type === 'ghost') {
+      this.reveal(Math.max(duration, PLAYER_CONSTANTS.GHOST_REVEAL_DURATION));
+    }
   }
 
   /** تحديث شفافية الشبح (يُعاد تعريفها في GhostEnemy) */

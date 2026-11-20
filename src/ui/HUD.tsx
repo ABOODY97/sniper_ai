@@ -37,6 +37,12 @@ export function HUD() {
   const weaponRole = useGameStore((s) => s.weaponRole);
   const ammoMag = useGameStore((s) => s.ammoMag);
   const ammoReserve = useGameStore((s) => s.ammoReserve);
+  const weaponResourceMode = useGameStore((s) => s.weaponResourceMode);
+  const weaponGaugeValue = useGameStore((s) => s.weaponGaugeValue);
+  const weaponGaugeMax = useGameStore((s) => s.weaponGaugeMax);
+  const weaponOverheated = useGameStore((s) => s.weaponOverheated);
+  const weaponOverheatTimer = useGameStore((s) => s.weaponOverheatTimer);
+  const weaponSpinProgress = useGameStore((s) => s.weaponSpinProgress);
   const reloadHint = useGameStore((s) => s.reloadHint);
   const weaponSlots = useGameStore((s) => s.weaponSlots);
 
@@ -432,6 +438,24 @@ export function HUD() {
               />
               <div className="absolute w-[4px] h-[4px] rounded-full bg-orange-300 -left-[2px] -top-[2px]" />
             </>
+          ) : adsStyle === 'minigun' ? (
+            <>
+              <div
+                className={`rounded-full border-2 border-dashed transition-all duration-100 -translate-x-1/2 -translate-y-1/2 absolute left-0 top-0 ${
+                  weaponOverheated
+                    ? 'w-[58px] h-[58px] border-red-500/90'
+                    : activeADS
+                      ? 'w-[30px] h-[30px] border-amber-400/95 shadow-[0_0_8px_rgba(245,158,11,0.45)]'
+                      : 'w-[66px] h-[66px] border-amber-300/75'
+                }`}
+              />
+              <div className="absolute w-[4px] h-[4px] rounded-full bg-amber-300 -left-[2px] -top-[2px]" />
+            </>
+          ) : adsStyle === 'flamethrower' ? (
+            <>
+              <div className="w-[82px] h-[50px] rounded-full border-2 border-orange-400/75 -translate-x-1/2 -translate-y-1/2 absolute left-0 top-0 shadow-[0_0_10px_rgba(249,115,22,0.35)]" />
+              <div className="absolute w-[5px] h-[5px] rounded-full bg-orange-300 -left-[2.5px] -top-[2.5px]" />
+            </>
           ) : (
             <>
               <div
@@ -545,21 +569,85 @@ export function HUD() {
         </div>
       </div>
 
-      {/* أسفل اليسار: السلاح الحالي، الذخيرة، ومفاتيح الأسلحة 1-7 */}
+      {/* أسفل اليسار: السلاح الحالي، الذخيرة/الحرارة/الوقود، ومفاتيح الأسلحة 1-9 */}
       <div className="fixed bottom-5 left-5 w-[356px] rounded-xl bg-slate-950/88 border border-sky-500/30 p-3.5 shadow-xl">
         <div className="flex items-baseline justify-between gap-2 mb-1">
           <div className="text-sm font-black text-sky-300 truncate">{weaponName}</div>
           <div className="text-[11px] font-bold text-slate-400 shrink-0">{weaponRole}</div>
         </div>
 
-        <div className="flex items-baseline justify-between leading-none mb-1" dir="ltr">
-          <span className="text-4xl font-black text-slate-50 hud-nums">{ammoMag}</span>
-          <span className="text-lg font-bold text-slate-400 hud-nums">/ {ammoReserve}</span>
-        </div>
+        {weaponResourceMode === 'heat' ? (
+          <div className="mb-1.5 flex flex-col gap-1.5">
+            <div className="flex items-baseline justify-between text-xs font-extrabold">
+              <span className={weaponOverheated ? 'text-red-400' : 'text-amber-300'}>
+                {weaponOverheated
+                  ? `🔥 سخونة زائدة (${weaponOverheatTimer.toFixed(1)}ث)`
+                  : `🌡️ حرارة السبطانات (${Math.round(weaponGaugeValue)}%)`}
+              </span>
+              <span className="text-slate-300 hud-nums">احتياطي: {ammoReserve}</span>
+            </div>
+            <div className="w-full h-3 rounded bg-slate-800 overflow-hidden border border-slate-700/80">
+              <div
+                className={`h-full transition-[width] duration-75 ${
+                  weaponOverheated
+                    ? 'bg-red-500'
+                    : weaponGaugeValue > 75
+                      ? 'bg-orange-500'
+                      : 'bg-amber-400'
+                }`}
+                style={{
+                  width: `${Math.max(0, Math.min(100, (weaponGaugeValue / Math.max(1, weaponGaugeMax)) * 100))}%`,
+                }}
+              />
+            </div>
+            <div className="flex items-center justify-between text-[11px] font-bold">
+              <span className="text-slate-400">تحمية الدوران</span>
+              <span className={weaponSpinProgress >= 0.99 ? 'text-emerald-400' : 'text-sky-300'}>
+                {weaponSpinProgress >= 0.99
+                  ? 'جاهز للإطلاق'
+                  : weaponSpinProgress > 0.05
+                    ? `${Math.round(weaponSpinProgress * 100)}%`
+                    : 'متوقف'}
+              </span>
+            </div>
+            <div className="w-full h-1.5 rounded bg-slate-800 overflow-hidden">
+              <div
+                className={`h-full transition-[width] duration-75 ${
+                  weaponSpinProgress >= 0.99 ? 'bg-emerald-400' : 'bg-sky-400'
+                }`}
+                style={{ width: `${Math.max(0, Math.min(100, weaponSpinProgress * 100))}%` }}
+              />
+            </div>
+          </div>
+        ) : weaponResourceMode === 'fuel' ? (
+          <div className="mb-1.5 flex flex-col gap-1.5">
+            <div className="flex items-baseline justify-between text-xs font-extrabold">
+              <span className={weaponGaugeValue < 20 ? 'text-red-400' : 'text-orange-300'}>
+                🔥 الوقود ({Math.round(weaponGaugeValue)}%)
+              </span>
+              <span className="text-slate-300 hud-nums">خزان احتياطي: {ammoReserve}</span>
+            </div>
+            <div className="w-full h-3.5 rounded bg-slate-800 overflow-hidden border border-orange-500/35">
+              <div
+                className={`h-full transition-[width] duration-75 ${
+                  weaponGaugeValue < 20 ? 'bg-red-500' : 'bg-gradient-to-l from-yellow-400 via-orange-500 to-red-500'
+                }`}
+                style={{
+                  width: `${Math.max(0, Math.min(100, (weaponGaugeValue / Math.max(1, weaponGaugeMax)) * 100))}%`,
+                }}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-baseline justify-between leading-none mb-1" dir="ltr">
+            <span className="text-4xl font-black text-slate-50 hud-nums">{ammoMag}</span>
+            <span className="text-lg font-bold text-slate-400 hud-nums">/ {ammoReserve}</span>
+          </div>
+        )}
 
         <div className="h-4 text-xs font-bold text-amber-400 text-right">{reloadHint}</div>
 
-        <div className="grid grid-cols-4 gap-1 mt-2">
+        <div className="grid grid-cols-3 gap-1 mt-2">
           {weaponSlots.map((slot) => (
             <div
               key={slot.id}

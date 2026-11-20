@@ -144,6 +144,24 @@ export class AudioManager {
         this.playTone('sine', 1400, 140, 0.32, 0.28);
         this.playTone('sawtooth', 240, 35, 0.36, 0.35);
         break;
+      case 'minigunSpin':
+        this.playTone('sawtooth', 140, 340, 0.16, 0.11);
+        this.playNoiseBurst(0.14, 720, 0.08, 1.8);
+        break;
+      case 'minigunFire':
+        this.playNoiseBurst(0.055, 1650, 0.21, 1.0);
+        this.playTone('sawtooth', 210, 68, 0.048, 0.18);
+        break;
+      case 'minigunOverheat':
+        this.playNoiseBurst(0.62, 2400, 0.3, 2.2);
+        this.playTone('sawtooth', 620, 130, 0.45, 0.22);
+        this.playTone('sine', 960, 420, 0.32, 0.14, 0.08);
+        break;
+      case 'flamethrower':
+        this.playNoiseBurst(0.18, 460, 0.24, 0.55);
+        this.playNoiseBurst(0.14, 1180, 0.12, 0.9);
+        this.playTone('sawtooth', 105, 70, 0.16, 0.09);
+        break;
       case 'grenadeThrow':
         this.playNoiseBurst(0.12, 800, 0.16, 0.8);
         this.playTone('sine', 300, 540, 0.11, 0.14);

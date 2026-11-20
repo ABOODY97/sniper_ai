@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import type { WeaponSlotUI } from '../types';
-import { WeaponBase, type WeaponMaterials } from './WeaponBase';
+import type { BossArchetypeId, WeaponSlotUI } from '../types';
+import { WeaponBase, type WeaponMaterials, type WeaponResourceHudState } from './WeaponBase';
 import { Rifle } from './Rifle';
 import { Shotgun } from './Shotgun';
 import { RailgunSniper } from './RailgunSniper';
@@ -8,10 +8,12 @@ import { FastPistol } from './FastPistol';
 import { SemiAutoSniper } from './SemiAutoSniper';
 import { RocketLauncher } from './RocketLauncher';
 import { ThermalSniper } from './ThermalSniper';
+import { Minigun } from './Minigun';
+import { Flamethrower } from './Flamethrower';
 
 /* ==========================================
    مدير الأسلحة — يدير التبديل، الإطلاق، التلقيم، الارتداد،
-   حركة السلاح باليد، وفتح أسلحة الباس (4-7)
+   حركة السلاح باليد، وفتح أسلحة الباس (4-9)
    ========================================== */
 
 export class WeaponManager {
@@ -51,6 +53,8 @@ export class WeaponManager {
       new SemiAutoSniper(this.sharedMaterials),
       new RocketLauncher(this.sharedMaterials),
       new ThermalSniper(this.sharedMaterials),
+      new Minigun(this.sharedMaterials),
+      new Flamethrower(this.sharedMaterials),
     ];
 
     this.muzzleLight = new THREE.PointLight(0x38bdf8, 0, 10);
@@ -91,15 +95,22 @@ export class WeaponManager {
     this.pivot.rotation.set(0, 0, 0);
   }
 
-  /** تبديل السلاح بالرقم (0-6) */
+  /** تبديل السلاح بالرقم (0-8 للمفاتيح 1-9) */
   public switchWeapon(idx: number): { switched: boolean; lockedMessage?: string } {
     if (idx === this.currentIndex || idx < 0 || idx >= this.weapons.length) {
       return { switched: false };
     }
     if (!this.weapons[idx].unlocked) {
-      this.customHint = '🔒 يُفتح هذا السلاح بعد القضاء على الباس!';
+      if (idx === 7) {
+        this.customHint = '🔒 يُفتح M134 ميني غان بعد القضاء على أول باس!';
+      } else if (idx === 8) {
+        this.customHint = '🔒 يُفتح قاذف اللهب بعد هزيمة باس ملكة السرب!';
+      } else {
+        this.customHint = '🔒 يُفتح هذا السلاح بعد القضاء على الباس!';
+      }
       return { switched: false, lockedMessage: this.customHint };
     }
+    this.weapons[this.currentIndex].onHolster();
     this.isReloading = false;
     this.reloadTimer = 0;
     this.customHint = '';
@@ -123,9 +134,12 @@ export class WeaponManager {
     return false;
   }
 
-  /** بدء إعادة التلقيم */
+  /** بدء إعادة التلقيم (مُعطّل للأسلحة ذات الحرارة أو الوقود) */
   public startReload(): boolean {
     const w = this.current;
+    if (w.config.resourceMode === 'heat' || w.config.resourceMode === 'fuel') {
+      return false;
+    }
     if (this.isReloading || w.mag === w.magSize || w.reserve <= 0) return false;
     this.isReloading = true;
     this.customHint = '';
@@ -133,14 +147,63 @@ export class WeaponManager {
     return true;
   }
 
-  /** فتح السلاح التالي المقفل بعد هزيمة الباس */
+  /** فتح السلاح التالي المقفل من أسلحة الباس القياسية (4-7) */
   public unlockNextBossWeapon(): WeaponBase | null {
-    const locked = this.weapons.find((w) => !w.unlocked);
+    const locked = this.weapons.find((w) => !w.unlocked && w.config.id <= 6);
     if (!locked) return null;
     locked.unlocked = true;
     locked.mag = locked.magSize;
     locked.reserve = locked.maxReserve;
     return locked;
+  }
+
+  /** فتح مكافآت الأسلحة عند قتل الزعيم (أول باس يفتح الميني غان، وملكة السرب تفتح قاذف اللهب) */
+  public unlockBossKillRewards(bossArchetype: BossArchetypeId, bossKills: number): WeaponBase[] {
+    const unlockedNow: WeaponBase[] = [];
+
+    // 1. قتل أول باس يفتح سلاح M134 ميني غان
+    const minigun = this.weapons[7];
+    if (bossKills >= 1 && minigun && !minigun.unlocked) {
+      minigun.unlocked = true;
+      minigun.mag = minigun.magSize;
+      minigun.reserve = minigun.maxReserve;
+      unlockedNow.push(minigun);
+    }
+
+    // 2. هزيمة باس ملكة السرب تفتح قاذف اللهب الحراري
+    const flamethrower = this.weapons[8];
+    if (bossArchetype === 'swarm_queen' && flamethrower && !flamethrower.unlocked) {
+      flamethrower.unlocked = true;
+      flamethrower.mag = flamethrower.magSize;
+      flamethrower.reserve = flamethrower.maxReserve;
+      if (flamethrower instanceof Flamethrower) {
+        flamethrower.fuel = flamethrower.magSize;
+      }
+      unlockedNow.push(flamethrower);
+    }
+
+    // 3. فتح السلاح التالي من أسلحة الباس القياسية (4-7) للحفاظ على التدرج
+    const standardUnlock = this.unlockNextBossWeapon();
+    if (standardUnlock) {
+      unlockedNow.push(standardUnlock);
+    }
+
+    return unlockedNow;
+  }
+
+  /** هل السلاح النشط يقيّد الركض والتزحلق والاندفاع */
+  public isMovementRestricted(): boolean {
+    return this.current.isMovementRestricted();
+  }
+
+  /** مضاعف سرعة الحركة الحالي من السلاح النشط */
+  public getMoveSpeedMultiplier(): number {
+    return this.current.getMoveSpeedMultiplier();
+  }
+
+  /** بيانات مورد السلاح الحالي (ذخيرة/حرارة/وقود) للـ HUD */
+  public getResourceHudState(): WeaponResourceHudState {
+    return this.current.getResourceHudState();
   }
 
   /** إضافة ذخيرة لكل الأسلحة المفتوحة */
@@ -241,6 +304,27 @@ export class WeaponManager {
 
   public getReloadHint(): string {
     if (this.customHint) return this.customHint;
+    if (this.current instanceof Minigun) {
+      if (this.current.overheated) {
+        return `🔥 سخونة زائدة! تبريد ${this.current.overheatTimer.toFixed(1)}ث`;
+      }
+      if (this.current.reserve <= 0) {
+        return 'نفدت ذخيرة الميني غان! التقط صناديق الإمداد';
+      }
+      if (this.current.spinProgress > 0.05 && this.current.spinProgress < 0.99) {
+        return 'جارِ تدوير السبطانات...';
+      }
+      return '';
+    }
+    if (this.current instanceof Flamethrower) {
+      if (this.current.fuel <= 0.5 && this.current.reserve <= 0.5) {
+        return 'نفد الوقود! التقط صناديق الإمداد';
+      }
+      if (this.current.fuel < 15 && this.current.reserve > 0) {
+        return 'وقود منخفض — توقف لإعادة الشحن';
+      }
+      return '';
+    }
     if (this.isReloading) return 'جارِ إعادة التلقيم...';
     if (this.current.mag === 0) return 'اضغط R لإعادة التلقيم!';
     return '';

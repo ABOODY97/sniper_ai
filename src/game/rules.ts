@@ -71,6 +71,24 @@ export const PLAYER_CONSTANTS = {
   HOLD_BREATH_RECOVER_RATE: 0.85,
   HOLD_BREATH_RECOVER_DELAY: 0.45,
   HOLD_BREATH_SWAY_MULT: 0.14,
+  MINIGUN_SPIN_UP_TIME: 0.7,
+  MINIGUN_HEAT_MAX: 100,
+  MINIGUN_OVERHEAT_COOLDOWN: 2.5,
+  MINIGUN_HEAT_COOL_RATE: 34,
+  MINIGUN_HEAT_COOL_DELAY: 0.25,
+  MINIGUN_BOSS_DAMAGE_MULT: 0.7,
+  MINIGUN_MOVE_SPEED_MULT: 0.5,
+  FLAME_RANGE: 9.0,
+  FLAME_CONE_DEG: 60,
+  FLAME_DIRECT_DPS: 25,
+  FLAME_FUEL_MAX: 100,
+  FLAME_FUEL_DRAIN_PER_SEC: 20,
+  FLAME_FUEL_REGEN_PER_SEC: 14,
+  FLAME_FUEL_REGEN_DELAY: 0.4,
+  BURN_DPS: 8,
+  BURN_DURATION: 3.0,
+  FLAME_PARTICLE_CAP_HIGH: 120,
+  FLAME_PARTICLE_CAP_LOW: 48,
 } as const;
 
 export const STORAGE_KEYS = {
@@ -219,6 +237,7 @@ export function computeHitDamage(params: {
   eliteAffix?: EliteAffixId | null;
   headshotMult?: number;
   bossShieldActive?: boolean;
+  weaponBossDamageMult?: number;
 }): { damage: number; isCrit: boolean; isShieldBlock: boolean } {
   const {
     enemyType,
@@ -230,36 +249,38 @@ export function computeHitDamage(params: {
     eliteAffix,
     headshotMult = 1.0,
     bossShieldActive = false,
+    weaponBossDamageMult = 1.0,
   } = params;
 
   if (enemyType === 'boss') {
+    const bossScale = weaponBossDamageMult;
     if (hitZone === 'shield') {
-      return { damage: rawDmg * 0.2 * dmgMult, isCrit: false, isShieldBlock: true };
+      return { damage: rawDmg * 0.2 * dmgMult * bossScale, isCrit: false, isShieldBlock: true };
     }
     const shieldScale = bossShieldActive ? PLAYER_CONSTANTS.ENGINEER_SHIELD_DR_MULT : 1.0;
     if (hitZone === 'head') {
       return {
-        damage: rawDmg * 2.0 * dmgMult * headshotMult * shieldScale,
+        damage: rawDmg * 2.0 * dmgMult * headshotMult * shieldScale * bossScale,
         isCrit: !bossShieldActive,
         isShieldBlock: bossShieldActive,
       };
     }
     if (hitZone === 'generator') {
       return {
-        damage: rawDmg * 2.2 * dmgMult * shieldScale,
+        damage: rawDmg * 2.2 * dmgMult * shieldScale * bossScale,
         isCrit: true,
         isShieldBlock: false,
       };
     }
     if (hitZone === 'weakpoint') {
       return {
-        damage: rawDmg * 2.0 * dmgMult * shieldScale,
+        damage: rawDmg * 2.0 * dmgMult * shieldScale * bossScale,
         isCrit: true,
         isShieldBlock: false,
       };
     }
     return {
-      damage: rawDmg * dmgMult * shieldScale,
+      damage: rawDmg * dmgMult * shieldScale * bossScale,
       isCrit: false,
       isShieldBlock: bossShieldActive,
     };
@@ -619,4 +640,140 @@ export function stepBallisticProjectile(
       z: vel.z,
     },
   };
+}
+
+export interface MinigunHeatState {
+  heat: number;
+  overheated: boolean;
+  overheatTimer: number;
+  coolDelay: number;
+}
+
+/** تحديث حرارة الميني غان: يسخن مع الإطلاق، ويصل للسخونة الزائدة عند 100 مع تبريد إجباري 2.5 ثانية */
+export function stepMinigunHeat(
+  state: MinigunHeatState,
+  dt: number,
+  firedShots: number,
+  heatPerShot = 2.1,
+  coolRate: number = PLAYER_CONSTANTS.MINIGUN_HEAT_COOL_RATE,
+  overheatDuration: number = PLAYER_CONSTANTS.MINIGUN_OVERHEAT_COOLDOWN,
+): MinigunHeatState {
+  const maxHeat = PLAYER_CONSTANTS.MINIGUN_HEAT_MAX;
+  let { heat, overheated, overheatTimer, coolDelay } = state;
+
+  if (overheated) {
+    overheatTimer = Math.max(0, overheatTimer - dt);
+    if (overheatTimer <= 0) {
+      return { heat: 0, overheated: false, overheatTimer: 0, coolDelay: 0 };
+    }
+    heat = (overheatTimer / Math.max(0.01, overheatDuration)) * maxHeat;
+    return { heat, overheated: true, overheatTimer, coolDelay: 0 };
+  }
+
+  if (firedShots > 0) {
+    heat += firedShots * heatPerShot;
+    coolDelay = PLAYER_CONSTANTS.MINIGUN_HEAT_COOL_DELAY;
+    if (heat >= maxHeat) {
+      return {
+        heat: maxHeat,
+        overheated: true,
+        overheatTimer: overheatDuration,
+        coolDelay: 0,
+      };
+    }
+    return { heat, overheated: false, overheatTimer: 0, coolDelay };
+  }
+
+  if (coolDelay > 0) {
+    coolDelay = Math.max(0, coolDelay - dt);
+  } else if (heat > 0) {
+    heat = Math.max(0, heat - coolRate * dt);
+  }
+  return { heat, overheated: false, overheatTimer: 0, coolDelay };
+}
+
+export interface FlamethrowerFuelState {
+  fuel: number;
+  reserve: number;
+  regenDelay: number;
+}
+
+/** تحديث وقود قاذف اللهب: يستهلك 20/ث أثناء الإطلاق، ويتجدد من الاحتياطي المحدود عند التوقف */
+export function stepFlamethrowerFuel(
+  state: FlamethrowerFuelState,
+  dt: number,
+  isFiring: boolean,
+  drainPerSec: number = PLAYER_CONSTANTS.FLAME_FUEL_DRAIN_PER_SEC,
+  regenPerSec: number = PLAYER_CONSTANTS.FLAME_FUEL_REGEN_PER_SEC,
+  maxFuel: number = PLAYER_CONSTANTS.FLAME_FUEL_MAX,
+): { next: FlamethrowerFuelState; activeFireDt: number } {
+  let { fuel, reserve, regenDelay } = state;
+  if (isFiring && fuel > 0 && dt > 0) {
+    const needed = drainPerSec * dt;
+    const consumed = Math.min(fuel, needed);
+    fuel = Math.max(0, fuel - consumed);
+    regenDelay = PLAYER_CONSTANTS.FLAME_FUEL_REGEN_DELAY;
+    const activeFireDt = drainPerSec > 0 ? consumed / drainPerSec : 0;
+    return { next: { fuel, reserve, regenDelay }, activeFireDt };
+  }
+
+  if (regenDelay > 0) {
+    regenDelay = Math.max(0, regenDelay - dt);
+  } else if (fuel < maxFuel && reserve > 0 && dt > 0) {
+    const canTransfer = Math.min(regenPerSec * dt, maxFuel - fuel, reserve);
+    fuel += canTransfer;
+    reserve = Math.max(0, reserve - canTransfer);
+  }
+
+  return { next: { fuel, reserve, regenDelay }, activeFireDt: 0 };
+}
+
+/** تطبيق حالة الاحتراق على العدو (تُحدّث المدة إلى 3 ثوانٍ دون تكديس الضرر) */
+export function applyBurnStatus(
+  currentTimer: number,
+  duration: number = PLAYER_CONSTANTS.BURN_DURATION,
+): number {
+  return Math.max(currentTimer, duration);
+}
+
+/** خطوة ضرر الاحتراق المستمر (8 ضرر/ثانية طوال مدة الاحتراق دون تكديس) */
+export function stepBurnStatus(
+  currentTimer: number,
+  dt: number,
+  dps: number = PLAYER_CONSTANTS.BURN_DPS,
+): { nextTimer: number; damage: number; burning: boolean } {
+  if (currentTimer <= 0 || dt <= 0) {
+    return { nextTimer: 0, damage: 0, burning: false };
+  }
+  const activeDt = Math.min(currentTimer, dt);
+  const nextTimer = Math.max(0, currentTimer - dt);
+  return {
+    nextTimer,
+    damage: activeDt * dps,
+    burning: nextTimer > 0,
+  };
+}
+
+/** فحص وجود نقطة هدف داخل مخروط قاذف اللهب (مدى 9 وحدات، زاوية 60 درجة) */
+export function isPointInFlameCone(
+  origin: { x: number; y: number; z: number },
+  forwardDir: { x: number; y: number; z: number },
+  targetPos: { x: number; y: number; z: number },
+  range: number = PLAYER_CONSTANTS.FLAME_RANGE,
+  coneAngleDeg: number = PLAYER_CONSTANTS.FLAME_CONE_DEG,
+): boolean {
+  const dx = targetPos.x - origin.x;
+  const dy = targetPos.y - origin.y;
+  const dz = targetPos.z - origin.z;
+  const distSq = dx * dx + dy * dy + dz * dz;
+  if (distSq > range * range) return false;
+  if (distSq < 1e-6) return true;
+
+  const fLen = Math.hypot(forwardDir.x, forwardDir.y, forwardDir.z);
+  if (fLen < 1e-6) return false;
+  const invDist = 1 / Math.sqrt(distSq);
+  const dot =
+    (dx * forwardDir.x + dy * forwardDir.y + dz * forwardDir.z) * invDist * (1 / fLen);
+  const minDot = Math.cos(((coneAngleDeg * 0.5) * Math.PI) / 180);
+  return dot >= minDot;
 }

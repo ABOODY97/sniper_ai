@@ -134,7 +134,16 @@ export interface MapDefinition {
   boulders: [number, number, number][];
 }
 
-export type AdsStyle = 'red_dot' | 'iron_sights' | 'tight_choke' | 'scope' | 'launcher';
+export type AdsStyle =
+  | 'red_dot'
+  | 'iron_sights'
+  | 'tight_choke'
+  | 'scope'
+  | 'launcher'
+  | 'minigun'
+  | 'flamethrower';
+
+export type WeaponResourceMode = 'ammo' | 'heat' | 'fuel';
 
 export interface ScopeZoomLevel {
   label: string;
@@ -175,9 +184,26 @@ export interface WeaponConfig {
   ballistics?: SniperBallisticsConfig;
   color: number;
   sfx: string;
+  resourceMode?: WeaponResourceMode;
   isSniper?: boolean;
   isThermal?: boolean;
   isRocket?: boolean;
+  isMinigun?: boolean;
+  isFlamethrower?: boolean;
+  spinUpTime?: number;
+  heatPerShot?: number;
+  heatCoolRate?: number;
+  overheatCooldown?: number;
+  bossDamageMult?: number;
+  tracerEveryN?: number;
+  moveSpeedMultWhileActive?: number;
+  restrictMobilityWhileActive?: boolean;
+  coneRange?: number;
+  coneAngleDeg?: number;
+  fuelDrainPerSec?: number;
+  fuelRegenPerSec?: number;
+  flameDirectDps?: number;
+  pickupReserveAmount?: number;
   splashRadius?: number;
   pierceCount?: number;
   restPos: THREE.Vector3;

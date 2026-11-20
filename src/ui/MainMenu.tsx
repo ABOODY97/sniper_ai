@@ -59,7 +59,7 @@ export function MainMenu() {
                 بروتوكول القنص
               </h1>
               <p className="mt-1.5 text-xs font-bold text-sky-400">
-                بقاء الموجات · 7 أسلحة · معارك الزعماء
+                بقاء الموجات · 9 أسلحة · معارك الزعماء
               </p>
             </div>
           </div>
@@ -102,7 +102,7 @@ export function MainMenu() {
 
       {/* سطر تلميحات التحكم المسطح أسفل الشاشة */}
       <div className="text-center text-xs font-bold text-slate-300/90 hud-text-stroke">
-        WASD حركة · Shift ركض · C تزحلق · Q اندفاع · Space قفز · G قنبلة · R تلقيم · 1-7 أسلحة · Esc إيقاف مؤقت
+        WASD حركة · Shift ركض · C تزحلق · Q اندفاع · Space قفز · G قنبلة · R تلقيم · 1-9 أسلحة · Esc إيقاف مؤقت
       </div>
     </div>
   );

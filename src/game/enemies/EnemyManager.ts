@@ -43,6 +43,7 @@ import {
   isBulletHittingPlayerHeight,
   pickBossArchetypeForWave,
   rollEliteAffix,
+  stepBurnStatus,
 } from '../rules';
 
 /* ==========================================
@@ -99,6 +100,7 @@ export interface EnemyUpdateCallbacks {
   onMinionsSummoned: (count: number) => void;
   onEnemySelfDestruct: (enemy: EnemyBase) => void;
   onEmpHitPlayer: (durationSec: number) => void;
+  onBurnDamage: (enemy: EnemyBase, damage: number) => void;
   syncBossHud: (boss: BossEnemy) => void;
 }
 
@@ -658,6 +660,46 @@ export class EnemyManager {
         e.hp = Math.min(e.maxHp, e.hp + PLAYER_CONSTANTS.ELITE_REGEN_PER_SEC * dt);
         if (e.hpBarGroup.visible) {
           e.refreshHpBar();
+        }
+      }
+
+      // تحديث حالة الاحتراق المستمر (8 ضرر/ث لمدة 3 ثوانٍ + كشف الشبح المحترق + جمر مجمع)
+      if (e.burnTimer > 0) {
+        const burnStep = stepBurnStatus(e.burnTimer, dt, PLAYER_CONSTANTS.BURN_DPS);
+        e.burnTimer = burnStep.nextTimer;
+
+        if (e.config.type === 'ghost') {
+          e.reveal(0.28);
+        }
+
+        if (e.flashTimer <= 0) {
+          if (burnStep.burning) {
+            const flicker = 0.55 + Math.sin(nowMs * 0.03) * 0.25;
+            e.bodyMat.emissive.setRGB(flicker, flicker * 0.28, 0.02);
+          } else {
+            const baseEmissive =
+              e.config.isBoss && e.bossPhase === 3
+                ? 0x450a0a
+                : e.config.type === 'ghost'
+                  ? 0x0e7490
+                  : 0x000000;
+            e.bodyMat.emissive.setHex(baseEmissive);
+          }
+        }
+
+        e.burnEmberTimer -= dt;
+        if (e.burnEmberTimer <= 0) {
+          e.burnEmberTimer = 0.16;
+          _tmpPos.copy(e.group.position);
+          if (!e.config.flying) _tmpPos.y += 1.0 * e.config.scale;
+          this.pools.spawnBurnEmber(_tmpPos);
+        }
+
+        if (burnStep.damage > 0) {
+          cb.onBurnDamage(e, burnStep.damage);
+          if (e.hp <= 0) {
+            continue;
+          }
         }
       }
 

@@ -6,6 +6,7 @@ import {
   ELITE_AFFIXES,
   PLAYER_CONSTANTS,
   WAVE_MUTATORS,
+  applyBurnStatus,
   computeBossMaxHp,
   computeBossPhase,
   computeComboMultiplier,
@@ -20,12 +21,16 @@ import {
   getKillStreakReward,
   getMapDisplayName,
   isBulletHittingPlayerHeight,
+  isPointInFlameCone,
   pickBossArchetypeForWave,
   pickEnemyTypeForWave,
   pickWaveMutator,
   rollEliteAffix,
   stepBallisticProjectile,
+  stepBurnStatus,
+  stepFlamethrowerFuel,
   stepHoldBreathState,
+  stepMinigunHeat,
 } from './rules';
 
 /* ==========================================
@@ -308,4 +313,110 @@ test('تدرّج حساسية الماوس مع مستويات التكبير (x
   assert.equal(moved.nextPos.z, -100);
   assert.equal(moved.nextVel.y, -4.0);
   assert.equal(moved.nextPos.y, 1.0); // 2 - 0.5 * 8 * 0.5^2 = 1.0
+});
+
+test('قواعد حرارة M134 ميني غان (سخونة زائدة عند 100 وتبريد إجباري 2.5ث) وتقليص ضرر الباس 30%', () => {
+  // تسخين تدريجي مع الطلقات ثم تبريد طبيعي عند التوقف
+  let heatState = { heat: 0, overheated: false, overheatTimer: 0, coolDelay: 0 };
+  heatState = stepMinigunHeat(heatState, 0, 20, 2.5);
+  assert.equal(heatState.heat, 50);
+  assert.equal(heatState.overheated, false);
+
+  // انتظار مهلة التبريد ثم التبريد التدريجي
+  heatState = stepMinigunHeat(heatState, PLAYER_CONSTANTS.MINIGUN_HEAT_COOL_DELAY, 0);
+  assert.equal(heatState.heat, 50);
+  heatState = stepMinigunHeat(heatState, 1.0, 0);
+  assert.ok(heatState.heat < 50 && heatState.heat > 0);
+
+  // الوصول إلى 100 يفعّل السخونة الزائدة مع تبريد إجباري 2.5 ثانية
+  heatState = stepMinigunHeat({ heat: 96, overheated: false, overheatTimer: 0, coolDelay: 0 }, 0, 2, 2.5);
+  assert.equal(heatState.overheated, true);
+  assert.equal(heatState.heat, 100);
+  assert.equal(heatState.overheatTimer, PLAYER_CONSTANTS.MINIGUN_OVERHEAT_COOLDOWN);
+
+  // أثناء التبريد الإجباري لا يمكن الإطلاق وتتراجع الحرارة تدريجياً حتى 2.5ث
+  heatState = stepMinigunHeat(heatState, 1.25, 5, 2.5);
+  assert.equal(heatState.overheated, true);
+  assert.ok(Math.abs(heatState.overheatTimer - 1.25) < 0.001);
+  assert.ok(Math.abs(heatState.heat - 50) < 0.01);
+
+  heatState = stepMinigunHeat(heatState, 1.25, 0, 2.5);
+  assert.equal(heatState.overheated, false);
+  assert.equal(heatState.overheatTimer, 0);
+  assert.equal(heatState.heat, 0);
+
+  // تقليص ضرر الميني غان ضد الباس بنسبة 30% (0.7x) دون التأثير على الأعداء العاديين
+  const normalHit = computeHitDamage({
+    enemyType: 'trooper',
+    rawDmg: 10,
+    dmgMult: 1,
+    hitZone: 'body',
+    currentHp: 100,
+    weaponBossDamageMult: PLAYER_CONSTANTS.MINIGUN_BOSS_DAMAGE_MULT,
+  });
+  assert.equal(normalHit.damage, 10);
+
+  const bossHit = computeHitDamage({
+    enemyType: 'boss',
+    rawDmg: 10,
+    dmgMult: 1,
+    hitZone: 'body',
+    currentHp: 900,
+    weaponBossDamageMult: PLAYER_CONSTANTS.MINIGUN_BOSS_DAMAGE_MULT,
+  });
+  assert.ok(Math.abs(bossHit.damage - 7) < 0.001);
+});
+
+test('حالة الاحتراق (8 ضرر/ث لمدة 3ث تُجدّد دون تكديس) ووقود ومخروط قاذف اللهب (مدى 9م وزاوية 60°)', () => {
+  // تطبيق الاحتراق يضبط المؤقت على 3 ثوانٍ؛ وتكرار تطبيقه يجدّده دون تكديس فوق 3 ثوانٍ
+  let burnTimer = applyBurnStatus(0);
+  assert.equal(burnTimer, 3.0);
+  const tick1 = stepBurnStatus(burnTimer, 1.0);
+  assert.equal(tick1.damage, 8);
+  assert.equal(tick1.nextTimer, 2.0);
+  assert.equal(tick1.burning, true);
+
+  // إعادة التطبيق تجدّد المدة إلى 3.0ث ولا تكدّسها إلى 5.0ث
+  burnTimer = applyBurnStatus(tick1.nextTimer);
+  assert.equal(burnTimer, 3.0);
+
+  // استهلاك كامل المدة (3ث) يلحق 24 ضرراً بالضبط (8 × 3) حتى لو كانت dt أكبر من المتبقي
+  const tickFinish = stepBurnStatus(burnTimer, 4.5);
+  assert.equal(tickFinish.damage, 24);
+  assert.equal(tickFinish.nextTimer, 0);
+  assert.equal(tickFinish.burning, false);
+
+  // استهلاك وقود قاذف اللهب بمعدل 20/ث والتجدد من الاحتياطي عند التوقف
+  let fuelState = { fuel: 100, reserve: 100, regenDelay: 0 };
+  const fireStep = stepFlamethrowerFuel(fuelState, 2.0, true);
+  assert.equal(fireStep.activeFireDt, 2.0);
+  assert.equal(fireStep.next.fuel, 60);
+
+  // التوقف عن الإطلاق ينتظر مهلة قصيرة ثم يشحن من الاحتياطي
+  const waitStep = stepFlamethrowerFuel(fireStep.next, PLAYER_CONSTANTS.FLAME_FUEL_REGEN_DELAY, false);
+  assert.equal(waitStep.next.fuel, 60);
+  const regenStep = stepFlamethrowerFuel(waitStep.next, 1.0, false);
+  assert.equal(regenStep.next.fuel, 60 + PLAYER_CONSTANTS.FLAME_FUEL_REGEN_PER_SEC);
+  assert.equal(regenStep.next.reserve, 100 - PLAYER_CONSTANTS.FLAME_FUEL_REGEN_PER_SEC);
+
+  // مخروط اللهب: مدى 9 وحدات، زاوية 60 درجة (نصف زاوية 30 درجة)
+  const origin = { x: 0, y: 1.75, z: 0 };
+  const forward = { x: 0, y: 0, z: -1 };
+  assert.equal(isPointInFlameCone(origin, forward, { x: 0, y: 1.75, z: -8.5 }), true);
+  assert.equal(isPointInFlameCone(origin, forward, { x: 0, y: 1.75, z: -9.5 }), false); // خارج مدى 9م
+  // عند زاوية 25° داخل المخروط (<= 30°)، وعند 40° خارج المخروط (> 30°)
+  assert.equal(isPointInFlameCone(origin, forward, { x: 2.3, y: 1.75, z: -5.0 }), true);
+  assert.equal(isPointInFlameCone(origin, forward, { x: 4.5, y: 1.75, z: -5.0 }), false);
+  assert.equal(isPointInFlameCone(origin, forward, { x: 0, y: 1.75, z: 3.0 }), false); // خلف اللاعب
+
+  // الدرع الأمامي للعدو المدرَّع يظل يحجب 80% من ضرر اللهب
+  const flameVsShield = computeHitDamage({
+    enemyType: 'shielded',
+    rawDmg: 25,
+    dmgMult: 1,
+    hitZone: 'shield',
+    currentHp: 160,
+  });
+  assert.equal(flameVsShield.damage, 5);
+  assert.equal(flameVsShield.isShieldBlock, true);
 });

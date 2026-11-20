@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { PLAYER_CONSTANTS } from '../rules';
 
 /* ==========================================
    تجميع الكائنات (Object Pooling) للطلقات والجزيئات وآثار الرصاص
@@ -33,6 +34,16 @@ interface PooledTracer {
   maxLife: number;
 }
 
+interface PooledFlameParticle {
+  active: boolean;
+  pos: THREE.Vector3;
+  vel: THREE.Vector3;
+  life: number;
+  maxLife: number;
+  startScale: number;
+  endScale: number;
+}
+
 export class ObjectPools {
   private readonly scene: THREE.Scene;
 
@@ -43,6 +54,15 @@ export class ObjectPools {
   private readonly particleMat: THREE.MeshBasicMaterial;
   private readonly particles: PooledParticle[] = [];
   private particleCursor = 0;
+
+  // مجمع جزيئات اللهب المخصص (حد أقصى صارم 120 على الجودة العالية و48 على المنخفضة)
+  private readonly maxFlameParticles = PLAYER_CONSTANTS.FLAME_PARTICLE_CAP_HIGH;
+  private effectiveFlameCap: number = PLAYER_CONSTANTS.FLAME_PARTICLE_CAP_HIGH;
+  private readonly flameMesh: THREE.InstancedMesh;
+  private readonly flameGeo: THREE.IcosahedronGeometry;
+  private readonly flameMat: THREE.MeshBasicMaterial;
+  private readonly flameParticles: PooledFlameParticle[] = [];
+  private flameCursor = 0;
 
   // مجموعة طلقات الأعداء
   private readonly bulletGeo: THREE.SphereGeometry;
@@ -55,6 +75,12 @@ export class ObjectPools {
   private readonly _dummy = new THREE.Object3D();
   private readonly _zeroScale = new THREE.Vector3(0, 0, 0);
   private readonly _color = new THREE.Color();
+  private readonly _flameYellow = new THREE.Color(0xfef08a);
+  private readonly _flameOrange = new THREE.Color(0xf97316);
+  private readonly _flameRed = new THREE.Color(0xb91c1c);
+  private readonly _right = new THREE.Vector3();
+  private readonly _up = new THREE.Vector3();
+  private readonly _worldUp = new THREE.Vector3(0, 1, 0);
   private qualityScale = 1.0;
   private mapParticleScale = 1.0;
 
@@ -87,6 +113,39 @@ export class ObjectPools {
     this.particleMesh.instanceMatrix.needsUpdate = true;
     if (this.particleMesh.instanceColor) this.particleMesh.instanceColor.needsUpdate = true;
     this.scene.add(this.particleMesh);
+
+    // 1.5 تهيئة مجمع جزيئات اللهب المخصص (نداء رسم واحد، حد أقصى 120)
+    this.flameGeo = new THREE.IcosahedronGeometry(0.24, 0);
+    this.flameMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.82,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    this.flameMesh = new THREE.InstancedMesh(this.flameGeo, this.flameMat, this.maxFlameParticles);
+    this.flameMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.flameMesh.frustumCulled = false;
+
+    for (let i = 0; i < this.maxFlameParticles; i++) {
+      this._dummy.position.set(0, -9999, 0);
+      this._dummy.scale.copy(this._zeroScale);
+      this._dummy.updateMatrix();
+      this.flameMesh.setMatrixAt(i, this._dummy.matrix);
+      this.flameMesh.setColorAt(i, this._flameOrange);
+      this.flameParticles.push({
+        active: false,
+        pos: new THREE.Vector3(0, -9999, 0),
+        vel: new THREE.Vector3(),
+        life: 0,
+        maxLife: 0.4,
+        startScale: 0.5,
+        endScale: 1.8,
+      });
+    }
+    this.flameMesh.instanceMatrix.needsUpdate = true;
+    if (this.flameMesh.instanceColor) this.flameMesh.instanceColor.needsUpdate = true;
+    this.scene.add(this.flameMesh);
 
     // 2. تهيئة مجموعة طلقات الأعداء (144 طلقة جاهزة لإعادة الاستخدام لدعم المدفعية الطائرة والزعماء)
     this.bulletGeo = new THREE.SphereGeometry(0.18, 8, 8);
@@ -133,6 +192,21 @@ export class ObjectPools {
   /** ضبط كثافة الجزيئات حسب إعداد الجودة (عالية/منخفضة) */
   public setQuality(high: boolean): void {
     this.qualityScale = high ? 1.0 : 0.45;
+    this.effectiveFlameCap = high
+      ? PLAYER_CONSTANTS.FLAME_PARTICLE_CAP_HIGH
+      : PLAYER_CONSTANTS.FLAME_PARTICLE_CAP_LOW;
+    // إخفاء أي جزيئات لهب تتجاوز الحد المنخفض فوراً
+    for (let i = this.effectiveFlameCap; i < this.maxFlameParticles; i++) {
+      if (this.flameParticles[i].active) {
+        this.flameParticles[i].active = false;
+        this._dummy.position.set(0, -9999, 0);
+        this._dummy.scale.copy(this._zeroScale);
+        this._dummy.updateMatrix();
+        this.flameMesh.setMatrixAt(i, this._dummy.matrix);
+      }
+    }
+    this.flameCursor %= this.effectiveFlameCap;
+    this.flameMesh.instanceMatrix.needsUpdate = true;
   }
 
   /** ضبط معامل الجزيئات حسب مساحة الخريطة (أقل في الخرائط الكبيرة 150-200 لتحسين الأداء) */
@@ -196,6 +270,79 @@ export class ObjectPools {
     }
     if (this.particleMesh.instanceColor) {
       this.particleMesh.instanceColor.needsUpdate = true;
+    }
+  }
+
+  /** توليد جزيئات مخروط قاذف اللهب من المجمع المخصص (مع احترام السقف الصارم للجودة) */
+  public spawnFlameConeParticles(
+    origin: THREE.Vector3,
+    forwardDir: THREE.Vector3,
+    count: number,
+    range: number = PLAYER_CONSTANTS.FLAME_RANGE,
+    coneAngleDeg: number = PLAYER_CONSTANTS.FLAME_CONE_DEG,
+  ): void {
+    const cap = this.effectiveFlameCap;
+    const actualCount = Math.max(1, Math.round(count * (cap / this.maxFlameParticles)));
+    const halfAngleRad = ((coneAngleDeg * 0.5) * Math.PI) / 180;
+    const maxTan = Math.tan(halfAngleRad) * 0.72;
+
+    this._right.crossVectors(forwardDir, this._worldUp);
+    if (this._right.lengthSq() < 1e-5) {
+      this._right.set(1, 0, 0);
+    } else {
+      this._right.normalize();
+    }
+    this._up.crossVectors(this._right, forwardDir).normalize();
+
+    for (let i = 0; i < actualCount; i++) {
+      const idx = this.flameCursor % cap;
+      this.flameCursor = (idx + 1) % cap;
+      const fp = this.flameParticles[idx];
+
+      const angle = Math.random() * Math.PI * 2;
+      const radial = Math.sqrt(Math.random()) * maxTan;
+      const speed = (range / 0.46) * (0.82 + Math.random() * 0.34);
+
+      fp.active = true;
+      fp.pos.copy(origin).addScaledVector(forwardDir, 0.15 + Math.random() * 0.25);
+      fp.vel
+        .copy(forwardDir)
+        .addScaledVector(this._right, Math.cos(angle) * radial)
+        .addScaledVector(this._up, Math.sin(angle) * radial)
+        .normalize()
+        .multiplyScalar(speed);
+      fp.maxLife = 0.32 + Math.random() * 0.2;
+      fp.life = fp.maxLife;
+      fp.startScale = 0.45 + Math.random() * 0.25;
+      fp.endScale = 2.0 + Math.random() * 0.9;
+      this.flameMesh.setColorAt(idx, this._flameYellow);
+    }
+    if (this.flameMesh.instanceColor) {
+      this.flameMesh.instanceColor.needsUpdate = true;
+    }
+  }
+
+  /** توليد جمر احتراق خفيف فوق الأعداء المشتعلين */
+  public spawnBurnEmber(pos: THREE.Vector3): void {
+    const cap = this.effectiveFlameCap;
+    const idx = this.flameCursor % cap;
+    this.flameCursor = (idx + 1) % cap;
+    const fp = this.flameParticles[idx];
+
+    fp.active = true;
+    fp.pos.set(
+      pos.x + (Math.random() - 0.5) * 0.65,
+      pos.y + Math.random() * 0.8,
+      pos.z + (Math.random() - 0.5) * 0.65,
+    );
+    fp.vel.set((Math.random() - 0.5) * 1.1, 2.2 + Math.random() * 1.6, (Math.random() - 0.5) * 1.1);
+    fp.maxLife = 0.38 + Math.random() * 0.22;
+    fp.life = fp.maxLife;
+    fp.startScale = 0.55;
+    fp.endScale = 0.18;
+    this.flameMesh.setColorAt(idx, this._flameOrange);
+    if (this.flameMesh.instanceColor) {
+      this.flameMesh.instanceColor.needsUpdate = true;
     }
   }
 
@@ -280,6 +427,49 @@ export class ObjectPools {
       this.particleMesh.instanceMatrix.needsUpdate = true;
     }
 
+    let flamesDirty = false;
+    let flameColorDirty = false;
+    for (let i = 0; i < this.maxFlameParticles; i++) {
+      const fp = this.flameParticles[i];
+      if (!fp.active) continue;
+      flamesDirty = true;
+      fp.life -= dt;
+      if (fp.life <= 0) {
+        fp.active = false;
+        this._dummy.position.set(0, -9999, 0);
+        this._dummy.scale.copy(this._zeroScale);
+        this._dummy.updateMatrix();
+        this.flameMesh.setMatrixAt(i, this._dummy.matrix);
+        continue;
+      }
+      // طفو طفيف للهب للأعلى وتباطؤ هوائي تدريجي
+      fp.vel.multiplyScalar(Math.max(0, 1 - 1.9 * dt));
+      fp.vel.y += 2.8 * dt;
+      fp.pos.addScaledVector(fp.vel, dt);
+
+      const t = 1 - fp.life / fp.maxLife;
+      const scale = fp.startScale + (fp.endScale - fp.startScale) * t;
+      this._dummy.position.copy(fp.pos);
+      this._dummy.scale.setScalar(Math.max(0.05, scale));
+      this._dummy.rotation.set(t * 4.5, t * 3.2, t * 2.1);
+      this._dummy.updateMatrix();
+      this.flameMesh.setMatrixAt(i, this._dummy.matrix);
+
+      if (t < 0.45) {
+        this._color.lerpColors(this._flameYellow, this._flameOrange, t / 0.45);
+      } else {
+        this._color.lerpColors(this._flameOrange, this._flameRed, (t - 0.45) / 0.55);
+      }
+      this.flameMesh.setColorAt(i, this._color);
+      flameColorDirty = true;
+    }
+    if (flamesDirty) {
+      this.flameMesh.instanceMatrix.needsUpdate = true;
+    }
+    if (flameColorDirty && this.flameMesh.instanceColor) {
+      this.flameMesh.instanceColor.needsUpdate = true;
+    }
+
     for (let i = 0; i < this.tracers.length; i++) {
       const t = this.tracers[i];
       if (!t.active) continue;
@@ -305,6 +495,16 @@ export class ObjectPools {
     }
     this.particleMesh.instanceMatrix.needsUpdate = true;
 
+    for (let i = 0; i < this.maxFlameParticles; i++) {
+      const fp = this.flameParticles[i];
+      fp.active = false;
+      this._dummy.position.set(0, -9999, 0);
+      this._dummy.scale.copy(this._zeroScale);
+      this._dummy.updateMatrix();
+      this.flameMesh.setMatrixAt(i, this._dummy.matrix);
+    }
+    this.flameMesh.instanceMatrix.needsUpdate = true;
+
     for (const b of this.bullets) {
       b.active = false;
       b.mesh.visible = false;
@@ -320,6 +520,10 @@ export class ObjectPools {
     this.scene.remove(this.particleMesh);
     this.particleGeo.dispose();
     this.particleMat.dispose();
+
+    this.scene.remove(this.flameMesh);
+    this.flameGeo.dispose();
+    this.flameMat.dispose();
 
     for (const b of this.bullets) {
       this.scene.remove(b.mesh);

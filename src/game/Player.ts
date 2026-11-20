@@ -207,9 +207,13 @@ export class Player {
     this.applyCameraRotation();
   }
 
-  /** تفعيل الاندفاع السريع على مفتاح Q */
-  public triggerDash(keys: Record<string, boolean>, audio: AudioManager): boolean {
-    if (this.dashCooldown > 0 || this.dashTimer > 0) return false;
+  /** تفعيل الاندفاع السريع على مفتاح Q (ممنوع أثناء دوران الميني غان) */
+  public triggerDash(
+    keys: Record<string, boolean>,
+    audio: AudioManager,
+    mobilityRestricted = false,
+  ): boolean {
+    if (mobilityRestricted || this.dashCooldown > 0 || this.dashTimer > 0) return false;
     if (this.isSliding) {
       this.isSliding = false;
       this.slideTimer = 0;
@@ -233,9 +237,20 @@ export class Player {
     return true;
   }
 
-  /** بدء التزحلق (0.85ث) أثناء الركض على الأرض */
-  public triggerSlide(keys: Record<string, boolean>, audio: AudioManager): boolean {
-    if (!this.isSprinting || !this.onGround || this.isSliding || this.slideCooldown > 0 || this.dashTimer > 0) {
+  /** بدء التزحلق (0.85ث) أثناء الركض على الأرض (ممنوع أثناء دوران الميني غان) */
+  public triggerSlide(
+    keys: Record<string, boolean>,
+    audio: AudioManager,
+    mobilityRestricted = false,
+  ): boolean {
+    if (
+      mobilityRestricted ||
+      !this.isSprinting ||
+      !this.onGround ||
+      this.isSliding ||
+      this.slideCooldown > 0 ||
+      this.dashTimer > 0
+    ) {
       return false;
     }
 
@@ -310,12 +325,25 @@ export class Player {
     mapManager: MapManager,
     pools: ObjectPools,
     audio: AudioManager,
+    weaponMoveMult = 1.0,
+    mobilityRestricted = false,
   ): { activeADS: boolean } {
     if (this.dashCooldown > 0) this.dashCooldown = Math.max(0, this.dashCooldown - rawDt);
     if (this.slideCooldown > 0) this.slideCooldown = Math.max(0, this.slideCooldown - rawDt);
     if (this.sprintWallCooldown > 0) this.sprintWallCooldown = Math.max(0, this.sprintWallCooldown - rawDt);
     if (this.grenadeCooldown > 0) this.grenadeCooldown = Math.max(0, this.grenadeCooldown - rawDt);
     if (this.jumpBufferTimer > 0) this.jumpBufferTimer = Math.max(0, this.jumpBufferTimer - rawDt);
+
+    // إلغاء التزحلق والاندفاع فوراً إذا كان السلاح يقيّد الحركة (الميني غان أثناء الدوران)
+    if (mobilityRestricted) {
+      if (this.isSliding) {
+        this.isSliding = false;
+        this.slideTimer = 0;
+      }
+      if (this.dashTimer > 0) {
+        this.dashTimer = 0;
+      }
+    }
 
     _forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     _right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
@@ -333,6 +361,7 @@ export class Player {
 
     // منطق الركض والطاقة (Stamina)
     const canSprint =
+      !mobilityRestricted &&
       holdingShift &&
       holdingForward &&
       !isADS &&
@@ -409,7 +438,7 @@ export class Player {
           ? PLAYER_CONSTANTS.ADS_SPEED
           : PLAYER_CONSTANTS.WALK_SPEED;
       _move.normalize();
-      this.camera.position.addScaledVector(_move, baseSpeed * this.speedMult * dt);
+      this.camera.position.addScaledVector(_move, baseSpeed * this.speedMult * weaponMoveMult * dt);
 
       if (this.onGround) {
         this.bobTimer += dt * (this.isSprinting ? 14.8 : 9.8);

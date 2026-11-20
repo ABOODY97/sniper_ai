@@ -10,6 +10,7 @@ import type {
   RadarSnapshot,
   UpgradeOption,
   WaveMutatorInfo,
+  WeaponResourceMode,
   WeaponSlotUI,
 } from './types';
 import { loadRecords, loadSettings, saveSettings } from './rules';
@@ -80,6 +81,12 @@ export interface GameStoreState {
   ammoReserve: number;
   isReloading: boolean;
   reloadHint: string;
+  weaponResourceMode: WeaponResourceMode;
+  weaponGaugeValue: number;
+  weaponGaugeMax: number;
+  weaponOverheated: boolean;
+  weaponOverheatTimer: number;
+  weaponSpinProgress: number;
   weaponSlots: WeaponSlotUI[];
 
   // التصويب والمؤثرات البصرية (أنماط ADS، تكبير المنظار، وحبس النفس)
@@ -180,6 +187,12 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   ammoReserve: 150,
   isReloading: false,
   reloadHint: '',
+  weaponResourceMode: 'ammo',
+  weaponGaugeValue: 0,
+  weaponGaugeMax: 100,
+  weaponOverheated: false,
+  weaponOverheatTimer: 0,
+  weaponSpinProgress: 0,
   weaponSlots: [
     { id: 0, shortName: '1 رشاش', unlocked: true, active: true },
     { id: 1, shortName: '2 شوتجن', unlocked: true, active: false },
@@ -188,6 +201,8 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
     { id: 4, shortName: '5 نصف آلي', unlocked: false, active: false },
     { id: 5, shortName: '6 صواريخ', unlocked: false, active: false },
     { id: 6, shortName: '7 حرارية', unlocked: false, active: false },
+    { id: 7, shortName: '8 ميني غان', unlocked: false, active: false },
+    { id: 8, shortName: '9 لهب', unlocked: false, active: false },
   ],
 
   crosshairSpread: 7,
