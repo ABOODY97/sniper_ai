@@ -24,7 +24,7 @@ export class SemiAutoSniper extends WeaponBase {
         baseMaxReserve: 70,
         reloadTime: 1.5,
         spread: 0.016,
-        adsSpread: 0.0008,
+        adsSpread: 0,
         recoilKick: 0.036,
         gunKick: 0.13,
         adsFov: 36,

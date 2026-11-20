@@ -62,6 +62,28 @@ export abstract class WeaponBase {
     this.reserve = Math.min(this.maxReserve, this.reserve + this.magSize * magsCount);
   }
 
+  /** التحقق مما إذا كان السلاح من فئة القناصات */
+  public isSniperWeapon(): boolean {
+    return Boolean(this.config.isSniper || this.config.isThermal);
+  }
+
+  /** حساب الانتشار الفعلي للطلقة (صفر تماماً عند التصويب بالمنظار في القناصات) */
+  public getEffectiveSpread(activeADS: boolean, isSprinting: boolean): number {
+    if (activeADS && this.isSniperWeapon()) {
+      return 0;
+    }
+    const baseSpread = activeADS ? this.config.adsSpread : this.config.spread;
+    return baseSpread * (isSprinting ? 1.6 : 1.0);
+  }
+
+  /** حساب الارتداد الفعلي للطلقة (صفر تماماً عند التصويب بالمنظار في القناصات) */
+  public getEffectiveRecoilKick(activeADS: boolean): number {
+    if (activeADS && this.isSniperWeapon()) {
+      return 0;
+    }
+    return this.config.recoilKick;
+  }
+
   /** تحرير الهندسيات والمواد الخاصة بهذا السلاح */
   public dispose(): void {
     for (const d of this.ownDisposables) {

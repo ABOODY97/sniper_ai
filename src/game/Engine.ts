@@ -61,6 +61,8 @@ interface UpgradeDefinition extends UpgradeOption {
 }
 
 const _raycaster = new THREE.Raycaster();
+const _rayOrigin = new THREE.Vector3();
+const _rayDir = new THREE.Vector3();
 const _ndc = new THREE.Vector2();
 const _muzzleWorld = new THREE.Vector3();
 const _endPoint = new THREE.Vector3();
@@ -711,27 +713,36 @@ export class GameEngine {
 
     weapon.mag--;
     this.weaponManager.fireCooldown = cfg.fireRate * this.weaponManager.fireRateMult;
-    this.weaponManager.weaponKickZ = cfg.gunKick;
     this.weaponManager.customHint = '';
-    this.player.camShake = Math.max(this.player.camShake, cfg.recoilKick * 0.65);
-    this.player.pitch = Math.min(Math.PI / 2 - 0.05, this.player.pitch + cfg.recoilKick);
-    this.camera.rotation.x = this.player.pitch;
+
+    const activeADS = this.isADS && !this.player.isSprinting;
+    const isSniper = weapon.isSniperWeapon();
 
     this.weaponManager.muzzleLight.color.setHex(cfg.color);
     this.weaponManager.muzzleLight.intensity = 5;
     this.audio.play(cfg.sfx);
 
+    // تحديث مصفوفة الكاميرا قبل أي ارتداد لضمان خروج شعاع الإصابة من مركز الكاميرا
+    // وباتجاه نظرها الفعلي دون أي تأثير من الارتداد أو إزاحة مجسم السلاح أثناء التصويب (ADS offset)
+    this.camera.updateMatrixWorld(true);
+
+    // نقطة الفوهة تُستخدم فقط لبداية الأثر البصري (أو إطلاق الصاروخ)، لا لحساب شعاع الإصابة
     this.weaponManager.getMuzzleWorldPosition(_muzzleWorld);
 
     if (cfg.isRocket) {
       this.firePlayerRocket(cfg.dmg, cfg.splashRadius ?? 6.5, _muzzleWorld);
+      const rocketRecoil = weapon.getEffectiveRecoilKick(activeADS);
+      if (rocketRecoil > 0) {
+        this.weaponManager.weaponKickZ = cfg.gunKick;
+        this.player.camShake = Math.max(this.player.camShake, rocketRecoil * 0.65);
+        this.player.pitch = Math.min(Math.PI / 2 - 0.05, this.player.pitch + rocketRecoil);
+        this.camera.rotation.x = this.player.pitch;
+      }
       this.syncWeaponHud();
       return;
     }
 
-    const activeADS = this.isADS && !this.player.isSprinting;
-    const baseSpread = activeADS ? cfg.adsSpread : cfg.spread;
-    const spread = baseSpread * (this.player.isSprinting ? 1.6 : 1.0);
+    const spread = weapon.getEffectiveSpread(activeADS, this.player.isSprinting);
     const targets: THREE.Object3D[] = [
       ...this.mapManager.obstacleMeshes,
       ...this.enemyManager.enemies.map((e) => e.group),
@@ -743,12 +754,20 @@ export class GameEngine {
     let anyShieldBlock = false;
 
     for (let p = 0; p < cfg.pellets; p++) {
-      const sx = (Math.random() - 0.5) * spread * 2;
-      const sy = (Math.random() - 0.5) * spread * 2;
-      _ndc.set(sx, sy);
-      _raycaster.setFromCamera(_ndc, this.camera);
+      if (spread === 0) {
+        // شعاع دقيق يخرج مباشرة من مركز الكاميرا باتجاه نظر الكاميرا بدون أي انحراف
+        this.camera.getWorldPosition(_rayOrigin);
+        this.camera.getWorldDirection(_rayDir);
+        _raycaster.set(_rayOrigin, _rayDir);
+      } else {
+        const sx = (Math.random() - 0.5) * spread * 2;
+        const sy = (Math.random() - 0.5) * spread * 2;
+        _ndc.set(sx, sy);
+        _raycaster.setFromCamera(_ndc, this.camera);
+      }
 
       const hits = _raycaster.intersectObjects(targets, true);
+      // نقطة بعيدة على نفس شعاع الكاميرا في حال لم يُصب الشعاع أي هدف
       _raycaster.ray.at(180, _endPoint);
 
       const pierced = new Set<EnemyBase>();
@@ -776,8 +795,18 @@ export class GameEngine {
         }
       }
 
-      const life = cfg.isSniper || cfg.isThermal ? 0.28 : 0.07;
-      this.pools.spawnTracer(_muzzleWorld, _endPoint, cfg.color, life, cfg.isSniper || cfg.isThermal ? 1.0 : 0.75);
+      // خط الأثر البصري يبدأ من الفوهة ويتجه إلى نقطة الإصابة الفعلية التي وجدها شعاع الكاميرا
+      const life = isSniper ? 0.28 : 0.07;
+      this.pools.spawnTracer(_muzzleWorld, _endPoint, cfg.color, life, isSniper ? 1.0 : 0.75);
+    }
+
+    // تطبيق الارتداد بعد اكتمال حساب الإصابة فقط (وصفر تماماً أثناء التصويب بالقناصة)
+    const recoilKick = weapon.getEffectiveRecoilKick(activeADS);
+    if (recoilKick > 0) {
+      this.weaponManager.weaponKickZ = cfg.gunKick;
+      this.player.camShake = Math.max(this.player.camShake, recoilKick * 0.65);
+      this.player.pitch = Math.min(Math.PI / 2 - 0.05, this.player.pitch + recoilKick);
+      this.camera.rotation.x = this.player.pitch;
     }
 
     if (anyCrit) {

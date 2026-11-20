@@ -27,7 +27,7 @@ export class ThermalSniper extends WeaponBase {
         baseMaxReserve: 35,
         reloadTime: 1.9,
         spread: 0.02,
-        adsSpread: 0.0001,
+        adsSpread: 0,
         recoilKick: 0.075,
         gunKick: 0.21,
         adsFov: 20,

@@ -24,7 +24,7 @@ export class RailgunSniper extends WeaponBase {
         baseMaxReserve: 30,
         reloadTime: 2.0,
         spread: 0.025,
-        adsSpread: 0.0002,
+        adsSpread: 0,
         recoilKick: 0.08,
         gunKick: 0.22,
         adsFov: 22,
