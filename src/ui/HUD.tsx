@@ -200,30 +200,6 @@ export function HUD() {
                   <span className="text-lg font-black text-emerald-400 hud-nums">{killStreak}</span>
                 </div>
               )}
-              {activeMutator && (
-                <div className="border-r border-slate-700/80 pr-4">
-                  <span className="block text-[11px] text-slate-400 font-bold">معدِّل الموجة</span>
-                  <span className="text-xs sm:text-sm font-black" style={{ color: activeMutator.color }}>
-                    🌀 {activeMutator.name}
-                  </span>
-                </div>
-              )}
-              {snowstormActive && (
-                <div className="border-r border-slate-700/80 pr-4">
-                  <span className="block text-[11px] text-slate-400 font-bold">الطقس</span>
-                  <span className="text-xs sm:text-sm font-black text-cyan-200">
-                    ❄️ عاصفة ثلجية
-                  </span>
-                </div>
-              )}
-              {mapLowGravity && !activeMutator && (
-                <div className="border-r border-slate-700/80 pr-4">
-                  <span className="block text-[11px] text-slate-400 font-bold">البيئة</span>
-                  <span className="text-xs sm:text-sm font-black text-indigo-300">
-                    🪐 جاذبية منخفضة
-                  </span>
-                </div>
-              )}
             </div>
           </div>
 
@@ -268,6 +244,28 @@ export function HUD() {
             </button>
           </div>
         </div>
+
+        {/* مؤشرات معدِّل الموجة والطقس والجاذبية في صف مستقل أسفل الشريط العلوي لمنع تداخله مع شريط الزعيم */}
+        {(activeMutator || snowstormActive || mapLowGravity) && (
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            {activeMutator && (
+              <div className="rounded-md bg-slate-950/88 border border-slate-700/80 px-2.5 py-1 text-xs font-black">
+                <span className="text-slate-400 ml-1">معدِّل الموجة:</span>
+                <span style={{ color: activeMutator.color }}>🌀 {activeMutator.name}</span>
+              </div>
+            )}
+            {snowstormActive && (
+              <div className="rounded-md bg-slate-950/88 border border-cyan-500/40 px-2.5 py-1 text-xs font-black text-cyan-200">
+                ❄️ عاصفة ثلجية
+              </div>
+            )}
+            {mapLowGravity && !activeMutator && (
+              <div className="rounded-md bg-slate-950/88 border border-indigo-400/40 px-2.5 py-1 text-xs font-black text-indigo-300">
+                🪐 جاذبية منخفضة
+              </div>
+            )}
+          </div>
+        )}
 
         {/* سجل الإصابات والقتل */}
         <div className="flex flex-col items-end gap-1.5 mt-1">

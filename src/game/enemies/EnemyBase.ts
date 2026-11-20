@@ -119,13 +119,21 @@ export abstract class EnemyBase {
   public flashTimer = 0;
   public shieldFlashTimer = 0;
 
-  // حقول خاصة بالقناص والدرون والباس
+  // حقول خاصة بالقناص والدرون والأعداء الطائرين الجدد
   public aimState: 'idle' | 'aiming' = 'idle';
   public aimTimer = 0;
   public aimTarget = new THREE.Vector3();
   public laserLine: THREE.Line | null = null;
   public hoverHeight = 0;
   public hasSummoned = false;
+  public burstRemaining = 0;
+  public burstDelay = 0;
+  public strafeRunAngle = 0;
+  public isDiving = false;
+  public diveTarget = new THREE.Vector3();
+  public turretHead: THREE.Object3D | null = null;
+  public isBossSummon = false;
+  public protectsBoss = false;
 
   // حقول خاصة بالمشوِّش (Jammer)
   public empCooldown = 0;
@@ -144,6 +152,10 @@ export abstract class EnemyBase {
   public bossPhase: 1 | 2 | 3 = 1;
   public bossAttackIdx = 0;
   public slamCharge = 0;
+  public slamQueued = 0;
+  public bossShieldMesh: THREE.Mesh | null = null;
+  public bossShieldActive = false;
+  public weakPointMats: THREE.MeshStandardMaterial[] = [];
 
   protected readonly ownDisposables: Array<THREE.BufferGeometry | THREE.Material | THREE.Texture> = [];
 

@@ -88,9 +88,9 @@ export class ObjectPools {
     if (this.particleMesh.instanceColor) this.particleMesh.instanceColor.needsUpdate = true;
     this.scene.add(this.particleMesh);
 
-    // 2. تهيئة مجموعة طلقات الأعداء (96 طلقة جاهزة لإعادة الاستخدام)
+    // 2. تهيئة مجموعة طلقات الأعداء (144 طلقة جاهزة لإعادة الاستخدام لدعم المدفعية الطائرة والزعماء)
     this.bulletGeo = new THREE.SphereGeometry(0.18, 8, 8);
-    for (let i = 0; i < 96; i++) {
+    for (let i = 0; i < 144; i++) {
       const material = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
       const mesh = new THREE.Mesh(this.bulletGeo, material);
       mesh.visible = false;
@@ -105,8 +105,8 @@ export class ObjectPools {
       });
     }
 
-    // 3. تهيئة مجموعة آثار الرصاص (48 خط ليزر)
-    for (let i = 0; i < 48; i++) {
+    // 3. تهيئة مجموعة آثار الرصاص (64 خط ليزر)
+    for (let i = 0; i < 64; i++) {
       const positions = new Float32Array(6);
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));

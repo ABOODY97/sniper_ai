@@ -1,140 +1,90 @@
 import * as THREE from 'three';
-import { EnemyBase, type EnemySharedGeometries } from '../enemies/EnemyBase';
-import { computeBossMaxHp, computeBossPhase } from '../rules';
+import type { BossArchetypeId } from '../types';
+import { EnemyBase, type EnemyConfig, type EnemySharedGeometries } from '../enemies/EnemyBase';
+import { computeBossMaxHp, computeBossPhase, getBossArchetypeMeta } from '../rules';
 
 /* ==========================================
-   الزعيم (الباس) — العملاق المدرع تيتان أوميغا
-   يظهر كل 5 موجات مع 3 مراحل ونقطتي ضعف (الرأس والمولّد الخلفي)
+   الفئة الأساسية للزعماء (BossEnemy)
+   ترث منها الزعماء الثلاثة (المهندس، ملكة السرب، العملاق الجبار)
+   وتدير المراحل الثلاث (1-3)، وتدرّج الصحة، وبيانات شريط الباس
    ========================================== */
 
-export class BossEnemy extends EnemyBase {
+export abstract class BossEnemy extends EnemyBase {
   public readonly tier: number;
+  public readonly archetype: BossArchetypeId;
+  public readonly subtitle: string;
+  public readonly bannerColor: string;
+  protected readonly phase3ColorHex: number;
 
-  constructor(wave: number, shared: EnemySharedGeometries) {
-    const maxHp = computeBossMaxHp(wave);
+  constructor(
+    archetype: BossArchetypeId,
+    wave: number,
+    shared: EnemySharedGeometries,
+    overrides: Partial<EnemyConfig> & { phase3ColorHex?: number } = {},
+  ) {
+    const meta = getBossArchetypeMeta(archetype);
+    const maxHp = computeBossMaxHp(wave, archetype);
+    const { phase3ColorHex, ...cfgOverrides } = overrides;
+
     super(
       {
         type: 'boss',
-        name: 'تيتان أوميغا (الباس)',
+        name: meta.name,
         hp: maxHp,
         isBoss: true,
-        speed: 3.5,
+        speed: 3.6,
         color: 0x7f1d1d,
         visor: 0xfde047,
         radarColor: '#ff0040',
-        scale: 2.35,
+        scale: 2.3,
         shoots: true,
-        fireRate: 2.6,
+        fireRate: 2.5,
         dmg: 18,
-        score: 1000,
+        score: 1200,
+        ...cfgOverrides,
       },
       wave,
       shared,
       maxHp,
     );
+
     this.tier = Math.max(1, Math.floor(wave / 5));
+    this.archetype = archetype;
+    this.subtitle = meta.subtitle;
+    this.bannerColor = meta.bannerColor;
+    this.phase3ColorHex = phase3ColorHex ?? 0xb91c1c;
   }
 
-  protected buildBody(_shared: EnemySharedGeometries): void {
-    const armorTrim = this.track(
-      new THREE.MeshStandardMaterial({ color: 0x991b1b, metalness: 0.72, roughness: 0.25 }),
-    );
-    const legGeo = this.track(new THREE.BoxGeometry(0.42, 1.0, 0.44));
+  public getHudName(): string {
+    return `${this.config.name} Mk-${this.tier}`;
+  }
 
-    this.leftLeg = new THREE.Mesh(legGeo, this.darkMat);
-    this.leftLeg.position.set(-0.38, 0.5, 0);
-    this.rightLeg = new THREE.Mesh(legGeo, this.darkMat);
-    this.rightLeg.position.set(0.38, 0.5, 0);
+  public getHudSubtitle(): string {
+    if (this.bossShieldActive) {
+      return '🛡️ درع الدرونات نشط — دمّر الدرونات الحامية لكسر الدرع!';
+    }
+    return this.subtitle;
+  }
 
-    const torso = new THREE.Mesh(this.track(new THREE.BoxGeometry(1.3, 1.25, 0.78)), this.bodyMat);
-    torso.position.y = 1.5;
-    torso.castShadow = true;
+  public getPhaseTransitionMessage(newPhase: 2 | 3): { banner: string; feed: string } {
+    if (newPhase === 2) {
+      return {
+        banner: `⚠️ المرحلة 2/3: ${this.config.name} يصعّد هجماته!`,
+        feed: `🔥 ${this.config.name} دخل المرحلة 2/3 — وتيرة هجوم أسرع!`,
+      };
+    }
+    return {
+      banner: `☠️ المرحلة الأخيرة 3/3: ${this.config.name} في أقصى غضب!`,
+      feed: `☠️ ${this.config.name} دخل المرحلة 3/3 — احذر الهجمات المكثفة!`,
+    };
+  }
 
-    const chestCore = new THREE.Mesh(this.track(new THREE.OctahedronGeometry(0.26, 0)), this.visorMat);
-    chestCore.position.set(0, 1.55, 0.42);
-
-    const shoulderGeo = this.track(new THREE.BoxGeometry(0.5, 0.45, 0.7));
-    const shoulderL = new THREE.Mesh(shoulderGeo, armorTrim);
-    shoulderL.position.set(-0.85, 1.98, 0);
-    const shoulderR = new THREE.Mesh(shoulderGeo, armorTrim);
-    shoulderR.position.set(0.85, 1.98, 0);
-
-    const cannonGeo = this.track(new THREE.CylinderGeometry(0.11, 0.13, 1.05, 10));
-    const cannonL = new THREE.Mesh(cannonGeo, this.darkMat);
-    cannonL.rotation.x = Math.PI / 2;
-    cannonL.position.set(-0.88, 1.6, 0.55);
-    const cannonR = new THREE.Mesh(cannonGeo, this.darkMat);
-    cannonR.rotation.x = Math.PI / 2;
-    cannonR.position.set(0.88, 1.6, 0.55);
-
-    const headMat = this.track(
-      new THREE.MeshStandardMaterial({
-        color: 0xfef08a,
-        emissive: 0xf59e0b,
-        emissiveIntensity: 0.9,
-        roughness: 0.22,
-      }),
-    );
-    const head = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.62, 0.54, 0.62)), headMat);
-    head.position.y = 2.42;
-    const visor = new THREE.Mesh(
-      this.track(new THREE.BoxGeometry(0.54, 0.16, 0.1)),
-      this.track(new THREE.MeshBasicMaterial({ color: 0xff0033 })),
-    );
-    visor.position.set(0, 2.44, 0.31);
-    const crown = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.7, 0.14, 0.7)), armorTrim);
-    crown.position.y = 2.74;
-
-    this.generatorMat = this.track(
-      new THREE.MeshStandardMaterial({
-        color: 0x38bdf8,
-        emissive: 0x0ea5e9,
-        emissiveIntensity: 1.5,
-        roughness: 0.15,
-      }),
-    );
-    const genCore = new THREE.Mesh(
-      this.track(new THREE.CylinderGeometry(0.36, 0.36, 0.85, 14)),
-      this.generatorMat,
-    );
-    genCore.position.set(0, 1.62, -0.58);
-    const genRing = new THREE.Mesh(this.track(new THREE.TorusGeometry(0.42, 0.06, 8, 18)), this.visorMat);
-    genRing.position.set(0, 1.62, -0.58);
-
-    this.group.add(
-      this.leftLeg,
-      this.rightLeg,
-      torso,
-      chestCore,
-      shoulderL,
-      shoulderR,
-      cannonL,
-      cannonR,
-      head,
-      visor,
-      crown,
-      genCore,
-      genRing,
-    );
-
-    const bodyParts = [
-      this.leftLeg,
-      this.rightLeg,
-      torso,
-      chestCore,
-      shoulderL,
-      shoulderR,
-      cannonL,
-      cannonR,
-      crown,
-    ];
-    bodyParts.forEach((p) => this.tagPart(p, 'body'));
-    this.tagPart(head, 'head');
-    this.tagPart(visor, 'head');
-    this.tagPart(genCore, 'generator');
-    this.tagPart(genRing, 'generator');
-
-    this.muzzleOffset.set(0, 1.65, 1.05);
+  /** تحديث حالة الدرع المرئي للباس (مثل درع الدرونات لدى المهندس) */
+  public setBossShieldActive(active: boolean): void {
+    this.bossShieldActive = active;
+    if (this.bossShieldMesh) {
+      this.bossShieldMesh.visible = active;
+    }
   }
 
   /** فحص الانتقال إلى المرحلة 2 أو 3 بناءً على الصحة المتبقية */
@@ -143,10 +93,10 @@ export class BossEnemy extends EnemyBase {
     if (nextPhase > this.bossPhase) {
       this.bossPhase = nextPhase;
       if (nextPhase === 2) {
-        this.speed *= 1.25;
+        this.speed *= 1.22;
       } else if (nextPhase === 3) {
-        this.speed *= 1.28;
-        this.bodyMat.color.setHex(0xb91c1c);
+        this.speed *= 1.25;
+        this.bodyMat.color.setHex(this.phase3ColorHex);
       }
       return { changed: true, newPhase: nextPhase };
     }

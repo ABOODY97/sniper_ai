@@ -3,8 +3,8 @@ import { useGameStore } from '../game/store';
 
 /* ==========================================
    الرادار التكتيكي الدائري (Canvas 2D مستقل بدون إعادة رسم React)
-   يعرض الأعداء بألوانهم وأشكالهم، الزعيم، دوائر الهاون، السطوح، وصناديق الإمداد
-   ويتعطّل مؤقتاً مع تأثير تشويش عند إصابة اللاعب بنبضة EMP من المشوِّش
+   يعرض الأعداء الأرضيين والطائرين، الأبراج، الزعماء (أرضي/طائر)،
+   دوائر الهاون، السطوح، وصناديق الإمداد، مع تثبيت الزعماء البعيدين على الحافة
    ========================================== */
 
 export function Radar() {
@@ -72,7 +72,7 @@ export function Radar() {
         return { x: cx + right * scale, y: cy - forward * scale };
       };
 
-      // السطوح المرتفعة (خريطة المدينة)
+      // السطوح المرتفعة ومنصات الرافعات
       for (const p of rd.platforms) {
         const pt = toRadar(p.x, p.z);
         if (Math.hypot(pt.x - cx, pt.y - cy) < 70) {
@@ -83,10 +83,20 @@ export function Radar() {
         }
       }
 
-      // الأعداء والصناديق ودوائر الهاون
+      // الأعداء الأرضيون والطائرون والزعماء والصناديق ودوائر الهاون
       for (const e of rd.entities) {
-        const pt = toRadar(e.x, e.z);
-        if (Math.hypot(pt.x - cx, pt.y - cy) >= 74) continue;
+        let pt = toRadar(e.x, e.z);
+        const distFromCenter = Math.hypot(pt.x - cx, pt.y - cy);
+        const isPriorityEdge = e.kind === 'boss' || e.kind === 'boss_flying' || e.kind === 'flying';
+
+        if (distFromCenter >= 72) {
+          if (!isPriorityEdge) continue;
+          const clampRatio = 69 / distFromCenter;
+          pt = {
+            x: cx + (pt.x - cx) * clampRatio,
+            y: cy + (pt.y - cy) * clampRatio,
+          };
+        }
 
         if (e.kind === 'mortar') {
           ctx.strokeStyle = e.color;
@@ -97,6 +107,19 @@ export function Radar() {
         } else if (e.kind === 'pickup_health' || e.kind === 'pickup_ammo') {
           ctx.fillStyle = e.color;
           ctx.fillRect(pt.x - 2.5, pt.y - 2.5, 5, 5);
+        } else if (e.kind === 'boss_flying') {
+          // زعيم طائر (ملكة السرب): معيّن كبير مجنّح محاط بإطار ذهبي
+          ctx.fillStyle = e.color;
+          ctx.beginPath();
+          ctx.moveTo(pt.x, pt.y - 7.5);
+          ctx.lineTo(pt.x + 8.5, pt.y);
+          ctx.lineTo(pt.x, pt.y + 6.5);
+          ctx.lineTo(pt.x - 8.5, pt.y);
+          ctx.closePath();
+          ctx.fill();
+          ctx.strokeStyle = '#fde047';
+          ctx.lineWidth = 1.8;
+          ctx.stroke();
         } else if (e.kind === 'boss') {
           ctx.fillStyle = e.color;
           ctx.beginPath();
@@ -105,15 +128,34 @@ export function Radar() {
           ctx.strokeStyle = '#fde047';
           ctx.lineWidth = 2;
           ctx.stroke();
+        } else if (e.kind === 'flying') {
+          // عدو طائر هجومي (مدفعية طائرة / انتحاري / قناص طائر): مثلث سماوي/ملوّن حاد
+          ctx.fillStyle = e.color;
+          ctx.beginPath();
+          ctx.moveTo(pt.x, pt.y - 5.2);
+          ctx.lineTo(pt.x + 4.8, pt.y + 4.0);
+          ctx.lineTo(pt.x, pt.y + 1.8);
+          ctx.lineTo(pt.x - 4.8, pt.y + 4.0);
+          ctx.closePath();
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+          ctx.lineWidth = 0.8;
+          ctx.stroke();
         } else if (e.kind === 'drone') {
           ctx.fillStyle = e.color;
           ctx.beginPath();
-          ctx.moveTo(pt.x, pt.y - 4.5);
-          ctx.lineTo(pt.x + 4.5, pt.y);
-          ctx.lineTo(pt.x, pt.y + 4.5);
-          ctx.lineTo(pt.x - 4.5, pt.y);
+          ctx.moveTo(pt.x, pt.y - 4.2);
+          ctx.lineTo(pt.x + 4.2, pt.y);
+          ctx.lineTo(pt.x, pt.y + 4.2);
+          ctx.lineTo(pt.x - 4.2, pt.y);
           ctx.closePath();
           ctx.fill();
+        } else if (e.kind === 'turret') {
+          ctx.fillStyle = e.color;
+          ctx.fillRect(pt.x - 3.2, pt.y - 3.2, 6.4, 6.4);
+          ctx.strokeStyle = '#fef08a';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(pt.x - 3.2, pt.y - 3.2, 6.4, 6.4);
         } else {
           ctx.fillStyle = e.color;
           const r = e.kind === 'heavy' ? 4.4 : 3.3;

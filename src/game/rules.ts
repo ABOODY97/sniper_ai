@@ -1,4 +1,5 @@
 import type {
+  BossArchetypeId,
   EliteAffixId,
   EnemyTypeId,
   GameSettings,
@@ -59,6 +60,11 @@ export const PLAYER_CONSTANTS = {
   ELITE_EXPLOSION_RADIUS: 6.5,
   ELITE_EXPLOSION_DAMAGE: 32,
   MUTATOR_BANNER_DURATION_MS: 4000,
+  SWARM_PACK_SIZE: 6,
+  SWARM_DRONE_HP: 15,
+  KAMIKAZE_BLAST_RADIUS: 4.8,
+  KAMIKAZE_BLAST_DAMAGE: 28,
+  ENGINEER_SHIELD_DR_MULT: 0.45,
 } as const;
 
 export const STORAGE_KEYS = {
@@ -195,7 +201,7 @@ export function computeKillPoints(
   return (baseScore + bonus) * computeComboMultiplier(comboCount);
 }
 
-/** حساب الضرر النهائي حسب نوع العدو ومنطقة الإصابة وصفة النخبة ومعدِّل الموجة */
+/** حساب الضرر النهائي حسب نوع العدو ومنطقة الإصابة وصفة النخبة ومعدِّل الموجة ودرع الباس */
 export function computeHitDamage(params: {
   enemyType: EnemyTypeId;
   rawDmg: number;
@@ -205,6 +211,7 @@ export function computeHitDamage(params: {
   instantHeadshotKill?: boolean;
   eliteAffix?: EliteAffixId | null;
   headshotMult?: number;
+  bossShieldActive?: boolean;
 }): { damage: number; isCrit: boolean; isShieldBlock: boolean } {
   const {
     enemyType,
@@ -215,23 +222,47 @@ export function computeHitDamage(params: {
     instantHeadshotKill,
     eliteAffix,
     headshotMult = 1.0,
+    bossShieldActive = false,
   } = params;
 
   if (enemyType === 'boss') {
+    if (hitZone === 'shield') {
+      return { damage: rawDmg * 0.2 * dmgMult, isCrit: false, isShieldBlock: true };
+    }
+    const shieldScale = bossShieldActive ? PLAYER_CONSTANTS.ENGINEER_SHIELD_DR_MULT : 1.0;
     if (hitZone === 'head') {
-      return { damage: rawDmg * 2.0 * dmgMult * headshotMult, isCrit: true, isShieldBlock: false };
+      return {
+        damage: rawDmg * 2.0 * dmgMult * headshotMult * shieldScale,
+        isCrit: !bossShieldActive,
+        isShieldBlock: bossShieldActive,
+      };
     }
     if (hitZone === 'generator') {
-      return { damage: rawDmg * 2.0 * dmgMult, isCrit: true, isShieldBlock: false };
+      return {
+        damage: rawDmg * 2.2 * dmgMult * shieldScale,
+        isCrit: true,
+        isShieldBlock: false,
+      };
     }
-    return { damage: rawDmg * dmgMult, isCrit: false, isShieldBlock: false };
+    if (hitZone === 'weakpoint') {
+      return {
+        damage: rawDmg * 2.0 * dmgMult * shieldScale,
+        isCrit: true,
+        isShieldBlock: false,
+      };
+    }
+    return {
+      damage: rawDmg * dmgMult * shieldScale,
+      isCrit: false,
+      isShieldBlock: bossShieldActive,
+    };
   }
 
   if (hitZone === 'shield') {
     return { damage: rawDmg * 0.2 * dmgMult, isCrit: false, isShieldBlock: true };
   }
 
-  if (hitZone === 'generator') {
+  if (hitZone === 'generator' || hitZone === 'weakpoint') {
     return { damage: rawDmg * 2.5 * dmgMult, isCrit: true, isShieldBlock: false };
   }
 
@@ -247,6 +278,41 @@ export function computeHitDamage(params: {
   return { damage: rawDmg * dmgMult * bodyMult, isCrit: false, isShieldBlock: false };
 }
 
+/** ترتيب دوران الزعماء الثلاثة كل 5 موجات (الموجة 5 المهندس، 10 ملكة السرب، 15 العملاق الجبار...) */
+export const BOSS_ROTATION: BossArchetypeId[] = ['engineer', 'swarm_queen', 'colossus'];
+
+export function pickBossArchetypeForWave(wave: number): BossArchetypeId {
+  const tierIndex = Math.max(0, Math.floor(wave / 5) - 1);
+  return BOSS_ROTATION[tierIndex % BOSS_ROTATION.length];
+}
+
+export function getBossArchetypeMeta(archetype: BossArchetypeId): {
+  name: string;
+  subtitle: string;
+  bannerColor: string;
+} {
+  switch (archetype) {
+    case 'engineer':
+      return {
+        name: 'المهندس المدرّع',
+        subtitle: 'ينشر أبراجاً قتالية ودرع درونات — دمّر الدرونات واستهدف المولّد الخلفي',
+        bannerColor: '#f59e0b',
+      };
+    case 'swarm_queen':
+      return {
+        name: 'ملكة السرب الطائرة',
+        subtitle: 'باس طائر يستدعي أسراب الدرونات — نقطة الضعف في النواة السفلية',
+        bannerColor: '#ec4899',
+      };
+    case 'colossus':
+      return {
+        name: 'العملاق الجبار',
+        subtitle: 'آلي حصار ضخم بضربات أرضية — نقاط الضعف في الساقين والظهر',
+        bannerColor: '#ef4444',
+      };
+  }
+}
+
 /** تحديد مرحلة الباس (1 أو 2 أو 3) بناءً على نسبة الصحة المتبقية */
 export function computeBossPhase(hp: number, maxHp: number): 1 | 2 | 3 {
   if (maxHp <= 0) return 3;
@@ -256,10 +322,13 @@ export function computeBossPhase(hp: number, maxHp: number): 1 | 2 | 3 {
   return 1;
 }
 
-/** حساب صحة الباس القصوى حسب رقم الموجة */
-export function computeBossMaxHp(wave: number): number {
+/** حساب صحة الباس القصوى حسب رقم الموجة ونوع الزعيم */
+export function computeBossMaxHp(wave: number, archetype?: BossArchetypeId): number {
   const bossTier = Math.max(1, Math.floor(wave / 5));
-  return 900 + (bossTier - 1) * 550;
+  const base = 900 + (bossTier - 1) * 520;
+  if (archetype === 'colossus') return Math.round(base * 1.25);
+  if (archetype === 'swarm_queen') return Math.round(base * 0.95);
+  return base;
 }
 
 /** حساب عدد أعداء الموجة العادية */
@@ -268,34 +337,48 @@ export function computeWaveEnemyCount(wave: number): number {
   return 5 + wave * 3;
 }
 
-/** اختيار نوع عدو مناسب لرقم الموجة وفق توزيع متوازن يشمل المشوِّش والشبح */
-export function pickEnemyTypeForWave(wave: number, rngValue: number): Exclude<EnemyTypeId, 'boss'> {
+/** اختيار نوع عدو مناسب لرقم الموجة وفق توزيع متوازن يشمل الأعداء الطائرين الجدد */
+export function pickEnemyTypeForWave(
+  wave: number,
+  rngValue: number,
+): Exclude<EnemyTypeId, 'boss' | 'turret'> {
   const r = Math.max(0, Math.min(0.9999, rngValue));
   if (wave === 1) {
-    return r < 0.55 ? 'rusher' : 'trooper';
+    if (r < 0.48) return 'rusher';
+    if (r < 0.88) return 'trooper';
+    return 'swarm_drone';
   }
   if (wave === 2) {
-    if (r < 0.38) return 'rusher';
-    if (r < 0.78) return 'trooper';
-    return 'drone';
+    if (r < 0.28) return 'rusher';
+    if (r < 0.56) return 'trooper';
+    if (r < 0.72) return 'drone';
+    if (r < 0.86) return 'swarm_drone';
+    return 'kamikaze';
   }
   if (wave === 3) {
-    if (r < 0.18) return 'rusher';
-    if (r < 0.38) return 'trooper';
-    if (r < 0.52) return 'drone';
-    if (r < 0.64) return 'shielded';
-    if (r < 0.76) return 'mortar';
-    if (r < 0.88) return 'ghost';
+    if (r < 0.14) return 'rusher';
+    if (r < 0.28) return 'trooper';
+    if (r < 0.38) return 'drone';
+    if (r < 0.48) return 'swarm_drone';
+    if (r < 0.58) return 'kamikaze';
+    if (r < 0.68) return 'shielded';
+    if (r < 0.78) return 'mortar';
+    if (r < 0.86) return 'ghost';
+    if (r < 0.94) return 'gunship';
     return 'heavy';
   }
-  if (r < 0.12) return 'rusher';
-  if (r < 0.25) return 'trooper';
-  if (r < 0.36) return 'drone';
-  if (r < 0.47) return 'shielded';
-  if (r < 0.58) return 'mortar';
-  if (r < 0.69) return 'jammer';
-  if (r < 0.79) return 'ghost';
-  if (r < 0.90) return 'sniper';
+  if (r < 0.09) return 'rusher';
+  if (r < 0.18) return 'trooper';
+  if (r < 0.25) return 'drone';
+  if (r < 0.33) return 'swarm_drone';
+  if (r < 0.41) return 'kamikaze';
+  if (r < 0.49) return 'gunship';
+  if (r < 0.57) return 'flying_sniper';
+  if (r < 0.65) return 'shielded';
+  if (r < 0.73) return 'mortar';
+  if (r < 0.81) return 'jammer';
+  if (r < 0.88) return 'ghost';
+  if (r < 0.94) return 'sniper';
   return 'heavy';
 }
 

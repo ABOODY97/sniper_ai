@@ -20,7 +20,14 @@ export type EnemyTypeId =
   | 'mortar'
   | 'jammer'
   | 'ghost'
+  | 'gunship'
+  | 'swarm_drone'
+  | 'kamikaze'
+  | 'flying_sniper'
+  | 'turret'
   | 'boss';
+
+export type BossArchetypeId = 'engineer' | 'swarm_queen' | 'colossus';
 
 export type EliteAffixId = 'explosive' | 'swift' | 'regenerating' | 'armored';
 
@@ -33,7 +40,7 @@ export interface WaveMutatorInfo {
   color: string;
 }
 
-export type HitZone = 'body' | 'head' | 'shield' | 'generator';
+export type HitZone = 'body' | 'head' | 'shield' | 'generator' | 'weakpoint';
 
 export interface ObstacleBox {
   x: number;
@@ -182,6 +189,9 @@ export interface KillFeedItem {
 export interface BossHudState {
   active: boolean;
   name: string;
+  archetype?: BossArchetypeId;
+  subtitle?: string;
+  shielded?: boolean;
   phase: 1 | 2 | 3;
   hp: number;
   maxHp: number;
@@ -191,7 +201,17 @@ export interface RadarEntity {
   x: number;
   z: number;
   color: string;
-  kind: 'enemy' | 'heavy' | 'drone' | 'boss' | 'pickup_health' | 'pickup_ammo' | 'mortar';
+  kind:
+    | 'enemy'
+    | 'heavy'
+    | 'drone'
+    | 'flying'
+    | 'turret'
+    | 'boss'
+    | 'boss_flying'
+    | 'pickup_health'
+    | 'pickup_ammo'
+    | 'mortar';
   radius?: number;
 }
 

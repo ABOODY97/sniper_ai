@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type {
+  BossArchetypeId,
   GameSettings,
   HitZone,
   MapId,
@@ -151,6 +152,8 @@ export class GameEngine {
   private activeMutator: WaveMutatorInfo | null = null;
   private headshotDamageMult = 1.0;
   private waveSpawnModifiers: EnemySpawnModifiers | undefined = undefined;
+  private forcedBossArchetype: BossArchetypeId | undefined = undefined;
+  private pendingFlyingShowcase = false;
 
   // مؤقتات الإشعارات البصرية
   private hitmarkerTimeout: number | null = null;
@@ -356,6 +359,13 @@ export class GameEngine {
         mapParam && validMaps.includes(mapParam as MapId) ? (mapParam as MapId) : initialMap;
       const waveParam = parseInt(params.get('wave') || '1', 10);
       const startWaveNum = Number.isFinite(waveParam) && waveParam >= 1 ? waveParam : 1;
+      const bossParam = params.get('boss');
+      const validBosses: BossArchetypeId[] = ['engineer', 'swarm_queen', 'colossus'];
+      this.forcedBossArchetype =
+        bossParam && validBosses.includes(bossParam as BossArchetypeId)
+          ? (bossParam as BossArchetypeId)
+          : undefined;
+      this.pendingFlyingShowcase = params.get('spawn') === 'flying';
       useGameStore.getState().setSelectedMap(targetMap);
       this.startMission(targetMap, false, startWaveNum);
     } else {
@@ -705,16 +715,55 @@ export class GameEngine {
     if (w % 5 === 0) {
       this.waveToSpawn = 0;
       this.waveEnemiesRemaining = 1;
+      const forcedArchetype = this.forcedBossArchetype;
+      this.forcedBossArchetype = undefined;
+      const bossSpawnPos = forcedArchetype
+        ? { x: 0, z: -Math.min(24, this.mapManager.halfArena - 10) }
+        : undefined;
       const boss = this.enemyManager.spawn(
         'boss',
         w,
         this.camera.position,
-        undefined,
+        bossSpawnPos,
+        this.waveSpawnModifiers,
+        { bossArchetype: forcedArchetype },
+      ) as BossEnemy | null;
+      if (boss) {
+        this.syncBossHud(boss);
+        this.showBanner(`☠️ تحذير: ${boss.getHudName()} قادم! (الموجة ${w})`, boss.bannerColor);
+        useGameStore
+          .getState()
+          .pushKillFeed(`☠️ زعيم الموجة ${w}: ${boss.getHudName()} — ${boss.getHudSubtitle()}`, true, true);
+      } else {
+        this.showBanner(`☠️ تحذير: الباس قادم! (الموجة ${w})`, '#ef4444');
+      }
+      this.audio.play('bossRoar');
+    } else if (this.pendingFlyingShowcase) {
+      this.pendingFlyingShowcase = false;
+      this.waveToSpawn = 0;
+      let spawnedTotal = 0;
+      if (this.enemyManager.spawn('gunship', Math.max(w, 6), this.camera.position, { x: -7, z: -24 })) {
+        spawnedTotal++;
+      }
+      if (this.enemyManager.spawn('kamikaze', Math.max(w, 6), this.camera.position, { x: 5, z: -22 })) {
+        spawnedTotal++;
+      }
+      if (this.enemyManager.spawn('flying_sniper', Math.max(w, 6), this.camera.position, { x: 11, z: -32 })) {
+        spawnedTotal++;
+      }
+      spawnedTotal += this.enemyManager.spawnSwarmPack(
+        Math.max(w, 6),
+        this.camera.position,
+        PLAYER_CONSTANTS.SWARM_PACK_SIZE,
+        { x: -1, z: -19 },
         this.waveSpawnModifiers,
       );
-      if (boss) this.syncBossHud(boss as BossEnemy);
-      this.showBanner(`☠️ تحذير: الباس قادم! (الموجة ${w})`, '#ef4444');
-      this.audio.play('bossRoar');
+      this.waveEnemiesRemaining = spawnedTotal;
+      useGameStore.getState().setHudPatch({
+        boss: { active: false, name: '', phase: 1, hp: 0, maxHp: 1 },
+      });
+      this.showBanner('✈️ إنذار جوي: سرب أعداء طائرين في الأجواء!', '#38bdf8');
+      this.audio.play('wave');
     } else {
       this.waveToSpawn = computeWaveEnemyCount(w);
       this.waveEnemiesRemaining = this.waveToSpawn;
@@ -775,7 +824,10 @@ export class GameEngine {
     useGameStore.getState().setHudPatch({
       boss: {
         active: true,
-        name: `تيتان أوميغا Mk-${boss.tier}`,
+        archetype: boss.archetype,
+        name: boss.getHudName(),
+        subtitle: boss.getHudSubtitle(),
+        shielded: boss.bossShieldActive,
         phase: boss.bossPhase,
         hp: Math.ceil(boss.hp),
         maxHp: boss.maxHp,
@@ -942,22 +994,23 @@ export class GameEngine {
       instantHeadshotKill: enemy.config.instantHeadshotKill,
       eliteAffix: enemy.eliteAffix,
       headshotMult: this.headshotDamageMult,
+      bossShieldActive: enemy.bossShieldActive,
     });
 
     if (result.isShieldBlock) {
       enemy.shieldFlashTimer = 0.14;
       if (enemy.shieldMat) enemy.shieldMat.opacity = 0.85;
       this.pools.spawnExplosion(hitPoint, 0x38bdf8, 6, 6);
-    } else if (hitZone === 'generator') {
+    } else if (hitZone === 'generator' || hitZone === 'weakpoint') {
       enemy.flashTimer = 0.08;
       enemy.bodyMat.emissive.setHex(0xffaa00);
-      this.pools.spawnExplosion(hitPoint, 0xfbbf24, 10, 8);
+      this.pools.spawnExplosion(hitPoint, 0xfbbf24, 12, 9);
     } else {
       enemy.flashTimer = 0.08;
-      enemy.bodyMat.emissive.setHex(0xffffff);
+      enemy.bodyMat.emissive.setHex(enemy.bossShieldActive ? 0x38bdf8 : 0xffffff);
       this.pools.spawnExplosion(
         hitPoint,
-        result.isCrit ? 0xfef08a : weaponColor,
+        enemy.bossShieldActive ? 0x38bdf8 : result.isCrit ? 0xfef08a : weaponColor,
         result.isCrit ? 10 : 5,
         7,
       );
@@ -968,18 +1021,14 @@ export class GameEngine {
     if (enemy.config.isBoss) {
       const boss = enemy as BossEnemy;
       const transition = boss.evaluatePhaseTransition();
-      if (transition.changed) {
+      if (transition.changed && (transition.newPhase === 2 || transition.newPhase === 3)) {
         this.audio.play('bossRoar');
         this.hitstopTimer = 0.055;
-        if (transition.newPhase === 2) {
-          this.showBanner('⚠️ المرحلة الثانية: الباس يضاعف هجماته!', '#f97316');
-          useGameStore.getState().pushKillFeed('🔥 الباس دخل المرحلة 2/3 — سرعة وهجمات أعلى!', true);
-          this.summonBossPhaseMinions(boss, 2);
-        } else if (transition.newPhase === 3) {
-          this.showBanner('☠️ المرحلة الأخيرة: الباس في أقصى غضب!', '#ef4444');
-          useGameStore.getState().pushKillFeed('☠️ الباس دخل المرحلة 3/3 — احذر موجات الصدمة!', true);
-          this.summonBossPhaseMinions(boss, 3);
-        }
+        const phaseMsg = boss.getPhaseTransitionMessage(transition.newPhase);
+        const bannerColor = transition.newPhase === 3 ? '#ef4444' : '#f97316';
+        this.showBanner(phaseMsg.banner, bannerColor);
+        useGameStore.getState().pushKillFeed(phaseMsg.feed, true, true);
+        this.summonBossPhaseMinions(boss, transition.newPhase === 2 ? 2 : 3);
       }
       this.syncBossHud(boss);
     } else {
@@ -988,7 +1037,12 @@ export class GameEngine {
 
     if (enemy.hp <= 0) {
       const dist = this.camera.position.distanceTo(enemy.group.position);
-      this.killEnemy(enemy, hitZone === 'head', hitZone === 'generator', dist);
+      this.killEnemy(
+        enemy,
+        hitZone === 'head',
+        hitZone === 'generator' || hitZone === 'weakpoint',
+        dist,
+      );
     }
 
     return { hit: true, crit: result.isCrit, shieldBlock: result.isShieldBlock };
@@ -996,13 +1050,43 @@ export class GameEngine {
 
   private summonBossPhaseMinions(boss: BossEnemy, count: number): void {
     let spawned = 0;
-    for (let i = 0; i < count && this.enemyManager.enemies.length < PLAYER_CONSTANTS.MAX_ENEMIES; i++) {
-      const ang = Math.random() * Math.PI * 2;
-      const sx = boss.group.position.x + Math.cos(ang) * 5.0;
-      const sz = boss.group.position.z + Math.sin(ang) * 5.0;
-      const pick = Math.random() > 0.5 ? 'rusher' : 'trooper';
-      if (this.enemyManager.spawn(pick, this.wave, this.camera.position, { x: sx, z: sz })) {
-        spawned++;
+    if (boss.archetype === 'swarm_queen') {
+      spawned = this.enemyManager.spawnSwarmPack(
+        this.wave,
+        this.camera.position,
+        Math.min(PLAYER_CONSTANTS.SWARM_PACK_SIZE, count + 2),
+        { x: boss.group.position.x, z: boss.group.position.z },
+        this.waveSpawnModifiers,
+        true,
+      );
+    } else if (boss.archetype === 'engineer') {
+      for (let i = 0; i < count && this.enemyManager.enemies.length < PLAYER_CONSTANTS.MAX_ENEMIES; i++) {
+        const ang = (i / Math.max(1, count)) * Math.PI * 2;
+        const sx = boss.group.position.x + Math.cos(ang) * 5.2;
+        const sz = boss.group.position.z + Math.sin(ang) * 5.2;
+        const pick = i === 0 ? 'turret' : 'drone';
+        if (
+          this.enemyManager.spawn(pick, this.wave, this.camera.position, { x: sx, z: sz }, this.waveSpawnModifiers, {
+            isBossSummon: true,
+            protectsBoss: pick === 'drone',
+          })
+        ) {
+          spawned++;
+        }
+      }
+    } else {
+      for (let i = 0; i < count && this.enemyManager.enemies.length < PLAYER_CONSTANTS.MAX_ENEMIES; i++) {
+        const ang = Math.random() * Math.PI * 2;
+        const sx = boss.group.position.x + Math.cos(ang) * 5.6;
+        const sz = boss.group.position.z + Math.sin(ang) * 5.6;
+        const pick = Math.random() > 0.45 ? 'rusher' : 'trooper';
+        if (
+          this.enemyManager.spawn(pick, this.wave, this.camera.position, { x: sx, z: sz }, this.waveSpawnModifiers, {
+            isBossSummon: true,
+          })
+        ) {
+          spawned++;
+        }
       }
     }
     if (spawned > 0) {
@@ -1053,7 +1137,9 @@ export class GameEngine {
       if (e.hp <= 0) continue;
       _tmpVec.copy(e.group.position);
       _tmpVec.y += e.config.flying ? 0 : 1.3 * e.config.scale;
-      const enemyRadius = e.config.isBoss ? 2.4 : 1.1;
+      const enemyRadius = e.config.isBoss
+        ? Math.max(2.6, 1.35 * e.config.scale)
+        : Math.max(1.15, 1.25 * e.config.scale);
       const dist = Math.max(0, _tmpVec.distanceTo(pos) - enemyRadius);
       if (dist <= rocket.splashRadius) {
         const falloff = 1 - 0.55 * (dist / rocket.splashRadius);
@@ -1128,7 +1214,10 @@ export class GameEngine {
       if (e.hp <= 0) continue;
       _tmpVec.copy(e.group.position);
       _tmpVec.y += e.config.flying ? 0 : 1.2 * e.config.scale;
-      const dist = Math.max(0, _tmpVec.distanceTo(pos) - (e.config.isBoss ? 2.2 : 1.0));
+      const enemyRadius = e.config.isBoss
+        ? Math.max(2.4, 1.25 * e.config.scale)
+        : Math.max(1.0, 1.15 * e.config.scale);
+      const dist = Math.max(0, _tmpVec.distanceTo(pos) - enemyRadius);
       if (dist <= PLAYER_CONSTANTS.GRENADE_RADIUS) {
         const falloff = 1 - 0.5 * (dist / PLAYER_CONSTANTS.GRENADE_RADIUS);
         this.applyDamageToEnemy(e, PLAYER_CONSTANTS.GRENADE_DAMAGE * falloff, _tmpVec, 'body', 0x4ade80);
@@ -1212,15 +1301,26 @@ export class GameEngine {
     const multTag = comboMult > 1 ? ` [x${comboMult}]` : '';
     const eliteTag = eliteAffix ? ` ★ نخبة (${ELITE_AFFIXES[eliteAffix].name})` : '';
     if (isBoss) {
-      useGameStore.getState().pushKillFeed(`🏆 تم القضاء على الباس! +${totalPts}${multTag}`, true, true);
+      const bossLabel = (enemy as BossEnemy).getHudName();
+      useGameStore
+        .getState()
+        .pushKillFeed(`🏆 تم إسقاط الزعيم (${bossLabel})! +${totalPts}${multTag}`, true, true);
     } else if (isHead) {
       useGameStore.getState().pushKillFeed(`🎯 إصابة بالرأس (${enemyName}${eliteTag}) +${totalPts}${multTag}`, true);
     } else if (isGenerator) {
-      useGameStore.getState().pushKillFeed(`⚡ تدمير مولّد (${enemyName}${eliteTag}) +${totalPts}${multTag}`, true);
+      useGameStore.getState().pushKillFeed(`⚡ تدمير نقطة الضعف (${enemyName}${eliteTag}) +${totalPts}${multTag}`, true);
     } else if (enemyType === 'jammer') {
       useGameStore.getState().pushKillFeed(`📡 تعطيل ${enemyName}${eliteTag} +${totalPts}${multTag}`, false, !!eliteAffix);
     } else if (enemyType === 'ghost') {
       useGameStore.getState().pushKillFeed(`👻 كشف وتصفية ${enemyName}${eliteTag} +${totalPts}${multTag}`, false, !!eliteAffix);
+    } else if (enemyType === 'gunship') {
+      useGameStore.getState().pushKillFeed(`🚁 إسقاط ${enemyName}${eliteTag} +${totalPts}${multTag}`, false, !!eliteAffix);
+    } else if (enemyType === 'flying_sniper') {
+      useGameStore.getState().pushKillFeed(`🎯 إسقاط ${enemyName}${eliteTag} +${totalPts}${multTag}`, false, !!eliteAffix);
+    } else if (enemyType === 'kamikaze') {
+      useGameStore.getState().pushKillFeed(`💥 تفجير ${enemyName} قبل انقضاضه${eliteTag} +${totalPts}${multTag}`, false, !!eliteAffix);
+    } else if (enemyType === 'turret') {
+      useGameStore.getState().pushKillFeed(`🔧 تدمير ${enemyName} +${totalPts}${multTag}`, false, false);
     } else {
       useGameStore.getState().pushKillFeed(`قضاء على ${enemyName}${eliteTag} +${totalPts}${multTag}`, false, !!eliteAffix);
     }
@@ -1259,10 +1359,10 @@ export class GameEngine {
       this.spawnPickup(new THREE.Vector3(dropOrigin.x - 1.8, 0, dropOrigin.z), 'health');
       this.spawnPickup(new THREE.Vector3(dropOrigin.x + 1.8, 0, dropOrigin.z), 'ammo');
 
-      // القضاء على بقية أتباع الباس فور سقوطه
+      // القضاء على بقية أتباع الباس وأبراجه ودروناته فور سقوطه
       for (const minion of [...this.enemyManager.enemies]) {
         _tmpVec.copy(minion.group.position);
-        _tmpVec.y += 1.2;
+        _tmpVec.y += minion.config.flying ? 0 : 1.2;
         this.pools.spawnExplosion(_tmpVec, minion.config.color, 12, 10);
         this.enemyManager.removeEnemy(minion);
       }
@@ -1763,7 +1863,24 @@ export class GameEngine {
         this.spawnCooldown -= dt;
         if (this.spawnCooldown <= 0 && this.enemyManager.enemies.length < PLAYER_CONSTANTS.MAX_ENEMIES) {
           const enemyType = pickEnemyTypeForWave(this.wave, Math.random());
-          if (
+          if (enemyType === 'swarm_drone') {
+            const spawned = this.enemyManager.spawnSwarmPack(
+              this.wave,
+              this.camera.position,
+              PLAYER_CONSTANTS.SWARM_PACK_SIZE,
+              undefined,
+              this.waveSpawnModifiers,
+            );
+            if (spawned > 0) {
+              this.waveToSpawn--;
+              if (spawned > 1) {
+                this.waveEnemiesRemaining += spawned - 1;
+                useGameStore.getState().setHudPatch({ enemiesLeft: this.waveEnemiesRemaining });
+              }
+              useGameStore.getState().pushKillFeed('🐝 سرب درونات (6 وحدات) يندفع في السماء!');
+              this.spawnCooldown = Math.max(0.85, 1.8 - this.wave * 0.08);
+            }
+          } else if (
             this.enemyManager.spawn(
               enemyType,
               this.wave,
@@ -1796,6 +1913,20 @@ export class GameEngine {
             this.waveEnemiesRemaining += count;
             useGameStore.getState().setHudPatch({ enemiesLeft: this.waveEnemiesRemaining });
           },
+          onEnemySelfDestruct: () => {
+            this.waveEnemiesRemaining = Math.max(0, this.waveEnemiesRemaining - 1);
+            useGameStore.getState().setHudPatch({ enemiesLeft: this.waveEnemiesRemaining });
+            if (
+              this.waveEnemiesRemaining === 0 &&
+              this.enemyManager.enemies.length === 0 &&
+              !this.pendingUpgrade &&
+              this.waveDelay <= 0
+            ) {
+              this.waveDelay = 1.9;
+              this.pendingUpgrade = true;
+              this.showBanner(`تم تطهير الموجة ${this.wave}!`, '#4ade80');
+            }
+          },
           onEmpHitPlayer: (durationSec) => {
             this.empDisabledTimer = Math.max(this.empDisabledTimer, durationSec);
             useGameStore.getState().setHudPatch({
@@ -1806,11 +1937,12 @@ export class GameEngine {
               .getState()
               .pushKillFeed('⚡ تشويش EMP من المشوِّش! (المنظار والرادار معطّلان 3ث)', true, true);
           },
+          syncBossHud: (boss) => this.syncBossHud(boss),
         },
         this.waveSpawnModifiers,
       );
 
-      // 6. تحديث صواريخ اللاعب (RPG)
+      // 6. تحديث صواريخ اللاعب (RPG) مع دقة إصابة محسّنة للأهداف الطائرة والزعماء
       for (let i = this.playerRockets.length - 1; i >= 0; i--) {
         const r = this.playerRockets[i];
         r.life -= dt;
@@ -1829,7 +1961,10 @@ export class GameEngine {
           for (const e of this.enemyManager.enemies) {
             _tmpVec.copy(e.group.position);
             _tmpVec.y += e.config.flying ? 0 : 1.3 * e.config.scale;
-            if (r.mesh.position.distanceTo(_tmpVec) < (e.config.isBoss ? 2.5 : 1.25)) {
+            const hitRadius = e.config.isBoss
+              ? Math.max(2.6, 1.35 * e.config.scale)
+              : Math.max(1.15, 1.25 * e.config.scale);
+            if (r.mesh.position.distanceTo(_tmpVec) < hitRadius) {
               hit = true;
               break;
             }
