@@ -30,6 +30,8 @@ export class RocketLauncher extends WeaponBase {
         recoilKick: 0.11,
         gunKick: 0.26,
         adsFov: 60,
+        adsStyle: 'launcher',
+        adsSensitivityMult: 0.7,
         color: 0xfb923c,
         sfx: 'rocketLaunch',
         restPos: new THREE.Vector3(0.34, -0.22, -0.44),

@@ -1,8 +1,10 @@
 import * as THREE from 'three';
-import type { WeaponConfig } from '../types';
+import type { ScopeZoomLevel, SniperBallisticsConfig, WeaponConfig } from '../types';
+import { PLAYER_CONSTANTS, computeZoomSensitivityMultiplier } from '../rules';
 
 /* ==========================================
-   الفئة الأساسية للأسلحة مع حالة الذخيرة وبناء النموذج ثلاثي الأبعاد
+   الفئة الأساسية للأسلحة مع حالة الذخيرة، مستويات التكبير،
+   الاهتزاز أثناء التصويب، البالستية القابلة للضبط، وبناء النموذج ثلاثي الأبعاد
    ========================================== */
 
 export interface WeaponMaterials {
@@ -18,6 +20,7 @@ export abstract class WeaponBase {
   public mag: number;
   public maxReserve: number;
   public reserve: number;
+  public zoomIndex = 0;
   public readonly model: THREE.Group;
 
   protected readonly ownDisposables: Array<THREE.BufferGeometry | THREE.Material> = [];
@@ -39,13 +42,14 @@ export abstract class WeaponBase {
 
   protected abstract buildModel(materials: WeaponMaterials): THREE.Group;
 
-  /** إعادة ضبط السلاح عند بدء مهمة جديدة */
+  /** إعادة ضبط السلاح ومستوى التكبير عند بدء مهمة جديدة */
   public reset(): void {
     this.unlocked = this.config.unlockedByDefault;
     this.magSize = this.config.baseMagSize;
     this.maxReserve = this.config.baseMaxReserve;
     this.mag = this.magSize;
     this.reserve = this.maxReserve - this.magSize;
+    this.zoomIndex = 0;
   }
 
   /** توسيع سعة المخزن والذخيرة (عند اختيار ترقية الذخيرة) */
@@ -65,6 +69,72 @@ export abstract class WeaponBase {
   /** التحقق مما إذا كان السلاح من فئة القناصات */
   public isSniperWeapon(): boolean {
     return Boolean(this.config.isSniper || this.config.isThermal);
+  }
+
+  /** مستوى التكبير الحالي لمنظار القناصة (x4 / x8 / x12) */
+  public getCurrentZoomLevel(): ScopeZoomLevel | null {
+    const levels = this.config.zoomLevels;
+    if (!levels || levels.length === 0) return null;
+    const clamped = Math.max(0, Math.min(levels.length - 1, this.zoomIndex));
+    return levels[clamped];
+  }
+
+  /** تغيير مستوى التكبير عبر عجلة الماوس (+1 زيادة التكبير، -1 تقليل التكبير) */
+  public stepZoom(delta: number): boolean {
+    const levels = this.config.zoomLevels;
+    if (!levels || levels.length <= 1) return false;
+    const next = Math.max(0, Math.min(levels.length - 1, this.zoomIndex + delta));
+    if (next === this.zoomIndex) return false;
+    this.zoomIndex = next;
+    return true;
+  }
+
+  /** تعيين مستوى التكبير مباشرةً بفهرس آمن */
+  public setZoomIndex(index: number): void {
+    const levels = this.config.zoomLevels;
+    if (!levels || levels.length === 0) {
+      this.zoomIndex = 0;
+      return;
+    }
+    this.zoomIndex = Math.max(0, Math.min(levels.length - 1, index));
+  }
+
+  /** نص مستوى التكبير المعروض داخل المنظار */
+  public getZoomLabel(): string {
+    return this.getCurrentZoomLevel()?.label ?? 'x4';
+  }
+
+  /** زاوية الرؤية الفعلية أثناء التصويب مع مراعاة مستوى التكبير وتعطيل EMP */
+  public getEffectiveAdsFov(empDisabled = false): number {
+    if (empDisabled && this.isSniperWeapon()) {
+      return 62;
+    }
+    const zoom = this.getCurrentZoomLevel();
+    return zoom ? zoom.fov : this.config.adsFov;
+  }
+
+  /** مضاعف حساسية الماوس أثناء التصويب (يتدرج تلقائياً مع التكبير في القناصات) */
+  public getAdsSensitivityMultiplier(currentFovDeg?: number): number {
+    if (this.isSniperWeapon()) {
+      const fov = currentFovDeg ?? this.getEffectiveAdsFov(false);
+      return computeZoomSensitivityMultiplier(fov, PLAYER_CONSTANTS.BASE_HIP_FOV);
+    }
+    return this.config.adsSensitivityMult ?? 0.65;
+  }
+
+  /** سعة اهتزاز المنظار الأساسية لهذا السلاح (تزداد تدريجياً مع التكبير الأعلى) */
+  public getScopeSwayAmplitude(): number {
+    if (!this.isSniperWeapon()) return 0;
+    const base = this.config.scopeSwayAmp ?? 0.008;
+    const mag = this.getCurrentZoomLevel()?.magnification ?? 4;
+    // تقليص السعة الزاوية قليلاً عند التكبير العالي مع إبقائها واضحة على الشاشة
+    return base * Math.sqrt(4 / Math.max(1, mag));
+  }
+
+  /** إعدادات فيزياء المقذوفات الواقعية للقناصة */
+  public getBallisticsConfig(): SniperBallisticsConfig | null {
+    if (!this.isSniperWeapon()) return null;
+    return this.config.ballistics ?? { speed: 210, gravity: 8.5, maxLife: 2.4 };
   }
 
   /** حساب الانتشار الفعلي للطلقة (صفر تماماً عند التصويب بالمنظار في القناصات) */

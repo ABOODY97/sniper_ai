@@ -28,10 +28,12 @@ export class Rifle extends WeaponBase {
         recoilKick: 0.016,
         gunKick: 0.09,
         adsFov: 56,
+        adsStyle: 'red_dot',
+        adsSensitivityMult: 0.68,
         color: 0x38bdf8,
         sfx: 'rifle',
         restPos: new THREE.Vector3(0.28, -0.24, -0.48),
-        adsPos: new THREE.Vector3(0.0, -0.15, -0.35),
+        adsPos: new THREE.Vector3(0.0, -0.115, -0.27),
       },
       materials,
     );
@@ -55,10 +57,34 @@ export class Rifle extends WeaponBase {
     const glow = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.116, 0.024, 0.36)), glowMat);
     glow.position.set(0, 0.04, -0.06);
 
-    const optic = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.06, 0.06, 0.15)), m.darkMetal);
-    optic.position.set(0, 0.105, 0.02);
+    // منظار النقطة الحمراء (Red-Dot Reflex Sight) بإطار مفتوح وعدسة شفافة ونقطة حمراء مضيئة
+    const opticBase = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.072, 0.018, 0.14)), m.darkMetal);
+    opticBase.position.set(0, 0.082, 0.02);
 
-    group.add(body, barrel, shroud, mag, glow, optic);
+    const postGeo = this.track(new THREE.BoxGeometry(0.008, 0.062, 0.07));
+    const postL = new THREE.Mesh(postGeo, m.darkMetal);
+    postL.position.set(-0.032, 0.118, 0.02);
+    const postR = new THREE.Mesh(postGeo, m.darkMetal);
+    postR.position.set(0.032, 0.118, 0.02);
+    const topHood = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.072, 0.008, 0.07)), m.darkMetal);
+    topHood.position.set(0, 0.149, 0.02);
+
+    const lensMat = this.track(
+      new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.12,
+        depthWrite: false,
+      }),
+    );
+    const lens = new THREE.Mesh(this.track(new THREE.PlaneGeometry(0.056, 0.054)), lensMat);
+    lens.position.set(0, 0.116, 0.02);
+
+    const redDotMat = this.track(new THREE.MeshBasicMaterial({ color: 0xef4444 }));
+    const redDot = new THREE.Mesh(this.track(new THREE.SphereGeometry(0.0032, 8, 8)), redDotMat);
+    redDot.position.set(0, 0.115, 0.021);
+
+    group.add(body, barrel, shroud, mag, glow, opticBase, postL, postR, topHood, lens, redDot);
     return group;
   }
 }

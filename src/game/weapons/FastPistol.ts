@@ -28,10 +28,12 @@ export class FastPistol extends WeaponBase {
         recoilKick: 0.012,
         gunKick: 0.065,
         adsFov: 62,
+        adsStyle: 'iron_sights',
+        adsSensitivityMult: 0.72,
         color: 0x2dd4bf,
         sfx: 'pistol',
         restPos: new THREE.Vector3(0.24, -0.22, -0.42),
-        adsPos: new THREE.Vector3(0.0, -0.13, -0.32),
+        adsPos: new THREE.Vector3(0.0, -0.095, -0.27),
       },
       materials,
     );
@@ -54,7 +56,27 @@ export class FastPistol extends WeaponBase {
     const glow = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.08, 0.02, 0.24)), glowMat);
     glow.position.set(0, 0.045, -0.1);
 
-    group.add(slide, grip, muzzle, glow);
+    // ناشنكاه حديدي ثلاثي النقاط (Iron Sights): ثلمة خلفية بعمودين + سن أمامي مضيء
+    const rearPostGeo = this.track(new THREE.BoxGeometry(0.014, 0.022, 0.016));
+    const rearL = new THREE.Mesh(rearPostGeo, m.darkMetal);
+    rearL.position.set(-0.022, 0.086, 0.075);
+    const rearR = new THREE.Mesh(rearPostGeo, m.darkMetal);
+    rearR.position.set(0.022, 0.086, 0.075);
+
+    const tritiumGeo = this.track(new THREE.BoxGeometry(0.0055, 0.0055, 0.004));
+    const rearDotMat = this.track(new THREE.MeshBasicMaterial({ color: 0x5eead4 }));
+    const rearDotL = new THREE.Mesh(tritiumGeo, rearDotMat);
+    rearDotL.position.set(-0.022, 0.089, 0.084);
+    const rearDotR = new THREE.Mesh(tritiumGeo, rearDotMat);
+    rearDotR.position.set(0.022, 0.089, 0.084);
+
+    const frontBlade = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.009, 0.024, 0.016)), m.darkMetal);
+    frontBlade.position.set(0, 0.087, -0.242);
+    const frontDotMat = this.track(new THREE.MeshBasicMaterial({ color: 0xfef08a }));
+    const frontDot = new THREE.Mesh(tritiumGeo, frontDotMat);
+    frontDot.position.set(0, 0.091, -0.233);
+
+    group.add(slide, grip, muzzle, glow, rearL, rearR, rearDotL, rearDotR, frontBlade, frontDot);
     return group;
   }
 }

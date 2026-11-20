@@ -134,6 +134,20 @@ export interface MapDefinition {
   boulders: [number, number, number][];
 }
 
+export type AdsStyle = 'red_dot' | 'iron_sights' | 'tight_choke' | 'scope' | 'launcher';
+
+export interface ScopeZoomLevel {
+  label: string;
+  magnification: number;
+  fov: number;
+}
+
+export interface SniperBallisticsConfig {
+  speed: number;
+  gravity: number;
+  maxLife: number;
+}
+
 export interface WeaponConfig {
   id: number;
   key: string;
@@ -154,6 +168,11 @@ export interface WeaponConfig {
   recoilKick: number;
   gunKick: number;
   adsFov: number;
+  adsStyle: AdsStyle;
+  adsSensitivityMult?: number;
+  zoomLevels?: ScopeZoomLevel[];
+  scopeSwayAmp?: number;
+  ballistics?: SniperBallisticsConfig;
   color: number;
   sfx: string;
   isSniper?: boolean;
@@ -229,6 +248,7 @@ export interface GameSettings {
   volume: number;
   muted: boolean;
   quality: QualityLevel;
+  realisticBallistics: boolean;
 }
 
 export interface EndRunSummary {

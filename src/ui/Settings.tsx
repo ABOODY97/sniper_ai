@@ -121,6 +121,34 @@ export function Settings() {
           </div>
         </div>
 
+        {/* فيزياء الرصاص الواقعية للقناصات (معطّلة افتراضياً) */}
+        <div className="flex flex-col gap-1.5 pt-1 border-t border-slate-800/80">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <span className="block text-sm font-bold text-slate-200">
+                فيزياء الرصاص الواقعية (القناصات)
+              </span>
+              <span className="block text-[11px] font-medium text-slate-400">
+                زمن وصول للطلقة وانحناء خفيف بالجاذبية لأسلحة القنص
+              </span>
+            </div>
+            <button
+              type="button"
+              aria-pressed={settings.realisticBallistics}
+              onClick={() =>
+                updateSettings({ realisticBallistics: !settings.realisticBallistics })
+              }
+              className={`shrink-0 px-3.5 py-1.5 rounded-lg text-xs font-extrabold border cursor-pointer transition-colors ${
+                settings.realisticBallistics
+                  ? 'bg-emerald-950 border-emerald-400 text-emerald-300'
+                  : 'bg-slate-800 border-slate-600 text-slate-300 hover:bg-slate-700'
+              }`}
+            >
+              {settings.realisticBallistics ? 'مفعّل (بالستية واقعية)' : 'معطّل (إصابة فورية)'}
+            </button>
+          </div>
+        </div>
+
         <button
           type="button"
           onClick={() => setSettingsOpen(false)}

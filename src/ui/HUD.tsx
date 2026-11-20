@@ -41,8 +41,14 @@ export function HUD() {
   const weaponSlots = useGameStore((s) => s.weaponSlots);
 
   const crosshairSpread = useGameStore((s) => s.crosshairSpread);
+  const activeADS = useGameStore((s) => s.activeADS);
+  const adsStyle = useGameStore((s) => s.adsStyle);
   const showScope = useGameStore((s) => s.showScope);
   const thermalScope = useGameStore((s) => s.thermalScope);
+  const scopeZoomLabel = useGameStore((s) => s.scopeZoomLabel);
+  const holdBreathRatio = useGameStore((s) => s.holdBreathRatio);
+  const holdBreathActive = useGameStore((s) => s.holdBreathActive);
+  const holdBreathCooldown = useGameStore((s) => s.holdBreathCooldown);
   const hitmarkerVisible = useGameStore((s) => s.hitmarkerVisible);
   const hitmarkerCrit = useGameStore((s) => s.hitmarkerCrit);
   const damageFlash = useGameStore((s) => s.damageFlash);
@@ -61,6 +67,7 @@ export function HUD() {
   const killFeed = useGameStore((s) => s.killFeed);
 
   const muted = useGameStore((s) => s.settings.muted);
+  const realisticBallistics = useGameStore((s) => s.settings.realisticBallistics);
   const updateSettings = useGameStore((s) => s.updateSettings);
   const engineActions = useGameStore((s) => s.engineActions);
 
@@ -122,7 +129,7 @@ export function HUD() {
         }}
       />
 
-      {/* منظار القناصة العادي والحراري */}
+      {/* منظار القناصة العادي والحراري مع مستويات التكبير x4/x8/x12 وشريط حبس النفس */}
       {showScope && (
         <div
           className="fixed inset-0 pointer-events-none"
@@ -132,20 +139,97 @@ export function HUD() {
               : 'radial-gradient(circle at center, transparent 32%, rgba(0, 0, 0, 0.96) 33%)',
           }}
         >
+          {/* خطوط التصويب الدقيقة وعلامات الميل-دوت لتعويض السقوط في البالستية الواقعية */}
           <div className="absolute top-1/2 left-0 right-0 h-px bg-red-500/70" />
           <div className="absolute left-1/2 top-0 bottom-0 w-px bg-red-500/70" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[4px] h-[4px] rounded-full bg-red-400 shadow-[0_0_6px_#ef4444]" />
+          {[28, 56, 84].map((offset) => (
+            <div key={offset}>
+              <div
+                className="absolute left-1/2 -translate-x-1/2 w-[10px] h-px bg-red-400/80"
+                style={{ top: `calc(50% + ${offset}px)` }}
+              />
+              <div
+                className="absolute top-1/2 -translate-y-1/2 h-[8px] w-px bg-red-400/65"
+                style={{ left: `calc(50% + ${offset}px)` }}
+              />
+              <div
+                className="absolute top-1/2 -translate-y-1/2 h-[8px] w-px bg-red-400/65"
+                style={{ left: `calc(50% - ${offset}px)` }}
+              />
+            </div>
+          ))}
+
           <div
             className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[64vmin] h-[64vmin] rounded-full border-2 ${
               thermalScope
                 ? 'border-orange-400/90 shadow-[0_0_25px_rgba(251,146,60,0.35)]'
-                : 'border-sky-400/50'
+                : holdBreathActive
+                  ? 'border-emerald-400/80 shadow-[0_0_22px_rgba(52,211,153,0.3)]'
+                  : 'border-sky-400/50'
             }`}
           />
-          {thermalScope && (
-            <div className="absolute top-[22%] left-1/2 -translate-x-1/2 text-xs font-black text-orange-400 tracking-widest">
-              منظار حراري خارق · اختراق 3 أهداف
+
+          {/* شارة مستوى التكبير الحالي (x4 / x8 / x12) وتنبيه البالستية/الحراري */}
+          <div className="absolute top-[20%] left-1/2 -translate-x-1/2 flex flex-col items-center gap-1">
+            <div className="flex items-center gap-2 rounded-md bg-slate-950/88 border border-sky-400/45 px-3 py-1 text-xs font-black">
+              <span className="text-sky-300 hud-nums" dir="ltr">
+                {scopeZoomLabel}
+              </span>
+              <span className="text-slate-400 text-[11px]">عجلة الماوس: تكبير</span>
+              {realisticBallistics && (
+                <span className="border-r border-slate-700 pr-2 text-emerald-300 text-[11px]">
+                  بالستية واقعية
+                </span>
+              )}
             </div>
-          )}
+            {thermalScope && (
+              <div className="text-xs font-black text-orange-400 tracking-wide">
+                منظار حراري خارق · اختراق 3 أهداف
+              </div>
+            )}
+          </div>
+
+          {/* شريط حبس النفس الصغير (Shift لتثبيت المنظار لمدة 3 ثوانٍ مع فترة تهدئة) */}
+          <div
+            className="absolute top-[74%] left-1/2 -translate-x-1/2 w-[224px] rounded-lg bg-slate-950/90 border border-slate-700/90 px-3 py-1.5 shadow-lg"
+            aria-label="مؤشر حبس النفس"
+          >
+            <div className="flex items-center justify-between text-[11px] font-extrabold mb-1">
+              <span
+                className={
+                  holdBreathCooldown > 0
+                    ? 'text-amber-300'
+                    : holdBreathActive
+                      ? 'text-emerald-300'
+                      : 'text-sky-200'
+                }
+              >
+                {holdBreathCooldown > 0
+                  ? '⏳ استعادة النفس'
+                  : holdBreathActive
+                    ? '🫁 حبس النفس — ثابت'
+                    : '🫁 Shift لحبس النفس'}
+              </span>
+              <span className="text-slate-300 hud-nums">
+                {holdBreathCooldown > 0
+                  ? `${holdBreathCooldown.toFixed(1)}ث`
+                  : `${Math.round(Math.max(0, Math.min(1, holdBreathRatio)) * 100)}%`}
+              </span>
+            </div>
+            <div className="w-full h-1.5 rounded bg-slate-800 overflow-hidden">
+              <div
+                className={`h-full transition-[width] duration-75 ${
+                  holdBreathCooldown > 0
+                    ? 'bg-amber-400'
+                    : holdBreathActive
+                      ? 'bg-emerald-400'
+                      : 'bg-sky-400'
+                }`}
+                style={{ width: `${Math.max(0, Math.min(100, holdBreathRatio * 100))}%` }}
+              />
+            </div>
+          </div>
         </div>
       )}
 
@@ -322,26 +406,53 @@ export function HUD() {
         </div>
       )}
 
-      {/* مؤشر التصويب المركزي الديناميكي */}
+      {/* مؤشر التصويب المركزي الديناميكي حسب نمط السلاح (نقطة حمراء / ناشنكاه / تضييق شوتجن / عادي) */}
       {!showScope && (
         <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-          <div
-            className="absolute w-[2px] h-[10px] -left-[1px] bottom-[6px] bg-sky-300 shadow-[0_0_4px_#000]"
-            style={{ transform: `translateY(${-crosshairSpread}px)` }}
-          />
-          <div
-            className="absolute w-[2px] h-[10px] -left-[1px] top-[6px] bg-sky-300 shadow-[0_0_4px_#000]"
-            style={{ transform: `translateY(${crosshairSpread}px)` }}
-          />
-          <div
-            className="absolute w-[10px] h-[2px] -top-[1px] right-[6px] bg-sky-300 shadow-[0_0_4px_#000]"
-            style={{ transform: `translateX(${-crosshairSpread}px)` }}
-          />
-          <div
-            className="absolute w-[10px] h-[2px] -top-[1px] left-[6px] bg-sky-300 shadow-[0_0_4px_#000]"
-            style={{ transform: `translateX(${crosshairSpread}px)` }}
-          />
-          <div className="absolute w-[3px] h-[3px] rounded-full bg-white -left-[1.5px] -top-[1.5px]" />
+          {activeADS && adsStyle === 'red_dot' ? (
+            <>
+              <div className="w-[46px] h-[46px] rounded-full border border-red-500/35 bg-red-500/[0.03] -translate-x-1/2 -translate-y-1/2 absolute left-0 top-0" />
+              <div className="absolute w-[6px] h-[6px] rounded-full bg-red-500 shadow-[0_0_10px_#ef4444] -left-[3px] -top-[3px]" />
+            </>
+          ) : activeADS && adsStyle === 'iron_sights' ? (
+            <>
+              <div className="absolute w-[7px] h-[2px] bg-teal-300/90 shadow-[0_0_4px_#000] -top-[1px] right-[9px]" />
+              <div className="absolute w-[7px] h-[2px] bg-teal-300/90 shadow-[0_0_4px_#000] -top-[1px] left-[9px]" />
+              <div className="absolute w-[2px] h-[6px] bg-teal-300/80 shadow-[0_0_4px_#000] -left-[1px] top-[5px]" />
+              <div className="absolute w-[4px] h-[4px] rounded-full bg-yellow-200 shadow-[0_0_6px_#fef08a] -left-[2px] -top-[2px]" />
+            </>
+          ) : adsStyle === 'tight_choke' ? (
+            <>
+              <div
+                className={`rounded-full border-2 transition-all duration-100 -translate-x-1/2 -translate-y-1/2 absolute left-0 top-0 ${
+                  activeADS
+                    ? 'w-[34px] h-[34px] border-orange-400/95 shadow-[0_0_10px_rgba(249,115,22,0.45)]'
+                    : 'w-[78px] h-[78px] border-orange-300/70 shadow-[0_0_4px_#000]'
+                }`}
+              />
+              <div className="absolute w-[4px] h-[4px] rounded-full bg-orange-300 -left-[2px] -top-[2px]" />
+            </>
+          ) : (
+            <>
+              <div
+                className="absolute w-[2px] h-[10px] -left-[1px] bottom-[6px] bg-sky-300 shadow-[0_0_4px_#000]"
+                style={{ transform: `translateY(${-crosshairSpread}px)` }}
+              />
+              <div
+                className="absolute w-[2px] h-[10px] -left-[1px] top-[6px] bg-sky-300 shadow-[0_0_4px_#000]"
+                style={{ transform: `translateY(${crosshairSpread}px)` }}
+              />
+              <div
+                className="absolute w-[10px] h-[2px] -top-[1px] right-[6px] bg-sky-300 shadow-[0_0_4px_#000]"
+                style={{ transform: `translateX(${-crosshairSpread}px)` }}
+              />
+              <div
+                className="absolute w-[10px] h-[2px] -top-[1px] left-[6px] bg-sky-300 shadow-[0_0_4px_#000]"
+                style={{ transform: `translateX(${crosshairSpread}px)` }}
+              />
+              <div className="absolute w-[3px] h-[3px] rounded-full bg-white -left-[1.5px] -top-[1.5px]" />
+            </>
+          )}
         </div>
       )}
 

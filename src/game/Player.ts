@@ -2,7 +2,13 @@ import * as THREE from 'three';
 import type { MapManager } from './maps/MapManager';
 import type { AudioManager } from './audio/AudioManager';
 import type { ObjectPools } from './pools/ObjectPools';
-import { PLAYER_CONSTANTS, computeSlideSpeed, isBulletHittingPlayerHeight } from './rules';
+import {
+  PLAYER_CONSTANTS,
+  computeSlideSpeed,
+  isBulletHittingPlayerHeight,
+  stepHoldBreathState,
+  type HoldBreathState,
+} from './rules';
 
 /* ==========================================
    وحدة اللاعب — تتحكم في الحركة (WASD)، القفز مع Coyote Time و Buffer،
@@ -69,11 +75,21 @@ export class Player {
   public speedMult = 1.0;
   public gravityMult = 1.0;
 
-  // مؤقتات حركة المشي والخطوات واهتزاز الكاميرا
+  // مؤقتات حركة المشي والخطوات واهتزاز الكاميرا واهتزاز المنظار وحبس النفس
   public bobTimer = 0;
   public stepSoundTimer = 0;
   public camShake = 0;
   public isMoving = false;
+  public scopeSwayTime = 0;
+  public scopeSwayYaw = 0;
+  public scopeSwayPitch = 0;
+  private scopeSwaySmoothMult = 1.0;
+  public holdBreath: HoldBreathState = {
+    remaining: PLAYER_CONSTANTS.HOLD_BREATH_MAX_DURATION,
+    cooldown: 0,
+    recoverDelay: 0,
+    isHolding: false,
+  };
 
   constructor(camera: THREE.PerspectiveCamera) {
     this.camera = camera;
@@ -123,10 +139,29 @@ export class Player {
     this.stepSoundTimer = 0;
     this.camShake = 0;
     this.isMoving = false;
+    this.scopeSwayTime = 0;
+    this.scopeSwayYaw = 0;
+    this.scopeSwayPitch = 0;
+    this.scopeSwaySmoothMult = 1.0;
+    this.holdBreath = {
+      remaining: PLAYER_CONSTANTS.HOLD_BREATH_MAX_DURATION,
+      cooldown: 0,
+      recoverDelay: 0,
+      isHolding: false,
+    };
 
     // نقطة البداية في ساحة مفتوحة تطل على المعالم الرئيسية مباشرةً
     this.camera.position.set(0, this.currentEyeHeight, 6);
     this.camera.rotation.set(0, 0, 0);
+  }
+
+  /** تطبيق زوايا الكاميرا الفعلية (مع إزاحة اهتزاز المنظار بحيث يظل مركز الشاشة مطابقاً لشعاع الكاميرا) */
+  public applyCameraRotation(): void {
+    this.camera.rotation.y = this.yaw + this.scopeSwayYaw;
+    this.camera.rotation.x = Math.max(
+      -Math.PI / 2 + 0.05,
+      Math.min(Math.PI / 2 - 0.05, this.pitch + this.scopeSwayPitch),
+    );
   }
 
   /** تطبيق دوران الكاميرا بالماوس */
@@ -135,8 +170,41 @@ export class Player {
     this.yaw -= movementX * sens;
     this.pitch -= movementY * sens;
     this.pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, this.pitch));
-    this.camera.rotation.y = this.yaw;
-    this.camera.rotation.x = this.pitch;
+    this.applyCameraRotation();
+  }
+
+  /** تحديث اهتزاز المنظار وحبس النفس (Shift أثناء التصويب بالقناصة لمدة 3ث مع تهدئة) */
+  public updateScopeSway(
+    rawDt: number,
+    isScoped: boolean,
+    holdingShift: boolean,
+    baseAmp: number,
+  ): void {
+    const res = stepHoldBreathState(this.holdBreath, rawDt, isScoped, holdingShift);
+    this.holdBreath = res.next;
+
+    const multDamp = 1 - Math.exp(-9 * rawDt);
+    this.scopeSwaySmoothMult += (res.swayMult - this.scopeSwaySmoothMult) * multDamp;
+
+    if (isScoped && baseAmp > 0) {
+      this.scopeSwayTime += rawDt;
+      const moveFactor = this.isMoving ? 1.35 : 1.0;
+      const amp = baseAmp * moveFactor * this.scopeSwaySmoothMult;
+      const t = this.scopeSwayTime;
+      const targetYaw = Math.sin(t * 1.15) * amp + Math.sin(t * 2.35) * amp * 0.25;
+      const targetPitch = Math.cos(t * 0.85) * amp * 0.82 + Math.sin(t * 1.9) * amp * 0.2;
+      const damp = 1 - Math.exp(-7 * rawDt);
+      this.scopeSwayYaw += (targetYaw - this.scopeSwayYaw) * damp;
+      this.scopeSwayPitch += (targetPitch - this.scopeSwayPitch) * damp;
+    } else {
+      const resetDamp = 1 - Math.exp(-12 * rawDt);
+      this.scopeSwayYaw += (0 - this.scopeSwayYaw) * resetDamp;
+      this.scopeSwayPitch += (0 - this.scopeSwayPitch) * resetDamp;
+      if (Math.abs(this.scopeSwayYaw) < 0.00002) this.scopeSwayYaw = 0;
+      if (Math.abs(this.scopeSwayPitch) < 0.00002) this.scopeSwayPitch = 0;
+    }
+
+    this.applyCameraRotation();
   }
 
   /** تفعيل الاندفاع السريع على مفتاح Q */

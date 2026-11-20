@@ -22,6 +22,7 @@ import {
   pickEnemyTypeForWave,
   pickWaveMutator,
   saveRecords,
+  stepBallisticProjectile,
 } from './rules';
 import { AudioManager } from './audio/AudioManager';
 import { ObjectPools } from './pools/ObjectPools';
@@ -45,6 +46,19 @@ interface PlayerRocket {
   splashRadius: number;
   life: number;
   trailTimer: number;
+}
+
+interface PlayerSniperProjectile {
+  mesh: THREE.Mesh;
+  pos: THREE.Vector3;
+  vel: THREE.Vector3;
+  gravity: number;
+  life: number;
+  dmg: number;
+  headDmg: number;
+  color: number;
+  maxPierce: number;
+  pierced: Set<EnemyBase>;
 }
 
 interface ThrownGrenade {
@@ -105,12 +119,14 @@ export class GameEngine {
 
   // كائنات ديناميكية
   private readonly playerRockets: PlayerRocket[] = [];
+  private readonly sniperProjectiles: PlayerSniperProjectile[] = [];
   private readonly grenades: ThrownGrenade[] = [];
   private readonly pickups: PickupItem[] = [];
   private readonly pickupGeo = new THREE.BoxGeometry(0.7, 0.7, 0.7);
   private readonly pickupRingGeo = new THREE.TorusGeometry(0.65, 0.05, 8, 20);
   private readonly rocketBodyGeo = new THREE.CylinderGeometry(0.11, 0.11, 0.72, 10);
   private readonly rocketNoseGeo = new THREE.ConeGeometry(0.11, 0.26, 10);
+  private readonly sniperBoltGeo = new THREE.CylinderGeometry(0.028, 0.028, 0.85, 6);
   private readonly grenadeGeo = new THREE.OctahedronGeometry(0.18, 1);
 
   // حالة الحلقة والوقت
@@ -368,6 +384,35 @@ export class GameEngine {
       this.pendingFlyingShowcase = params.get('spawn') === 'flying';
       useGameStore.getState().setSelectedMap(targetMap);
       this.startMission(targetMap, false, startWaveNum);
+
+      // معاملات اختبار اختيارية لمقارنة أنماط التصويب ومستويات التكبير والبالستية الواقعية
+      const weaponParam = params.get('weapon');
+      if (weaponParam !== null) {
+        const wIdx = parseInt(weaponParam, 10);
+        if (Number.isFinite(wIdx) && wIdx >= 0 && wIdx < this.weaponManager.weapons.length) {
+          this.weaponManager.weapons[wIdx].unlocked = true;
+          this.weaponManager.switchWeapon(wIdx);
+        }
+      }
+      const zoomParam = params.get('zoom');
+      if (zoomParam !== null) {
+        const zIdx = parseInt(zoomParam, 10);
+        if (Number.isFinite(zIdx)) {
+          this.weaponManager.current.setZoomIndex(zIdx);
+        }
+      }
+      if (params.get('ballistics') === '1') {
+        useGameStore.getState().updateSettings({ realisticBallistics: true });
+      }
+      if (params.get('ads') === '1') {
+        this.isADS = true;
+        const w = this.weaponManager.current;
+        this.camera.fov = w.getEffectiveAdsFov(false);
+        this.camera.updateProjectionMatrix();
+        this.weaponManager.pivot.position.copy(w.config.adsPos);
+        this.weaponManager.pivot.visible = !w.isSniperWeapon();
+      }
+      this.syncHudImmediate();
     } else {
       useGameStore.getState().setScreen('title');
       // وضع الكاميرا على زاوية البداية الاستعراضية قبل أول رسم فوري
@@ -596,6 +641,12 @@ export class GameEngine {
       this.scene.remove(r.mesh);
     }
     this.playerRockets.length = 0;
+
+    for (const sp of this.sniperProjectiles) {
+      (sp.mesh.material as THREE.Material).dispose();
+      this.scene.remove(sp.mesh);
+    }
+    this.sniperProjectiles.length = 0;
 
     for (const g of this.grenades) {
       this.disposeGroupMaterials(g.mesh);
@@ -884,13 +935,40 @@ export class GameEngine {
         this.weaponManager.weaponKickZ = cfg.gunKick;
         this.player.camShake = Math.max(this.player.camShake, rocketRecoil * 0.65);
         this.player.pitch = Math.min(Math.PI / 2 - 0.05, this.player.pitch + rocketRecoil);
-        this.camera.rotation.x = this.player.pitch;
+        this.player.applyCameraRotation();
       }
       this.syncWeaponHud();
       return;
     }
 
     const spread = weapon.getEffectiveSpread(activeADS, this.player.isSprinting);
+
+    // وضع فيزياء الرصاص الواقعية (اختياري، معطّل افتراضياً): مقذوف بزمن وصول وانحناء خفيف للقناصات
+    if (isSniper && useGameStore.getState().settings.realisticBallistics) {
+      if (spread === 0) {
+        this.camera.getWorldPosition(_rayOrigin);
+        this.camera.getWorldDirection(_rayDir);
+      } else {
+        const sx = (Math.random() - 0.5) * spread * 2;
+        const sy = (Math.random() - 0.5) * spread * 2;
+        _ndc.set(sx, sy);
+        _raycaster.setFromCamera(_ndc, this.camera);
+        _rayOrigin.copy(_raycaster.ray.origin);
+        _rayDir.copy(_raycaster.ray.direction);
+      }
+      this.fireBallisticSniperRound(weapon, _rayOrigin, _rayDir, _muzzleWorld);
+
+      const recoilKick = weapon.getEffectiveRecoilKick(activeADS);
+      if (recoilKick > 0) {
+        this.weaponManager.weaponKickZ = cfg.gunKick;
+        this.player.camShake = Math.max(this.player.camShake, recoilKick * 0.65);
+        this.player.pitch = Math.min(Math.PI / 2 - 0.05, this.player.pitch + recoilKick);
+        this.player.applyCameraRotation();
+      }
+      this.syncWeaponHud();
+      return;
+    }
+
     const targets: THREE.Object3D[] = [
       ...this.mapManager.obstacleMeshes,
       ...this.enemyManager.enemies.map((e) => e.group),
@@ -954,7 +1032,7 @@ export class GameEngine {
       this.weaponManager.weaponKickZ = cfg.gunKick;
       this.player.camShake = Math.max(this.player.camShake, recoilKick * 0.65);
       this.player.pitch = Math.min(Math.PI / 2 - 0.05, this.player.pitch + recoilKick);
-      this.camera.rotation.x = this.player.pitch;
+      this.player.applyCameraRotation();
     }
 
     if (anyCrit) {
@@ -1092,6 +1170,128 @@ export class GameEngine {
     if (spawned > 0) {
       this.waveEnemiesRemaining += spawned;
       useGameStore.getState().setHudPatch({ enemiesLeft: this.waveEnemiesRemaining });
+    }
+  }
+
+  private fireBallisticSniperRound(
+    weapon: import('./weapons/WeaponBase').WeaponBase,
+    origin: THREE.Vector3,
+    dir: THREE.Vector3,
+    muzzleWorld: THREE.Vector3,
+  ): void {
+    const cfg = weapon.config;
+    const ballistics = weapon.getBallisticsConfig() ?? { speed: 210, gravity: 8.5, maxLife: 2.4 };
+    const normDir = dir.clone().normalize();
+    const startPos = origin.clone();
+
+    const boltMat = new THREE.MeshBasicMaterial({ color: cfg.color });
+    const boltMesh = new THREE.Mesh(this.sniperBoltGeo, boltMat);
+    boltMesh.position.copy(startPos);
+    boltMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normDir);
+    this.scene.add(boltMesh);
+
+    // أثر بصري قصير ينطلق من الفوهة نحو مسار المقذوف الفعلي
+    _endPoint.copy(startPos).addScaledVector(normDir, 10);
+    this.pools.spawnTracer(muzzleWorld, _endPoint, cfg.color, 0.14, 0.85);
+
+    this.sniperProjectiles.push({
+      mesh: boltMesh,
+      pos: startPos,
+      vel: normDir.multiplyScalar(ballistics.speed),
+      gravity: ballistics.gravity,
+      life: ballistics.maxLife,
+      dmg: cfg.dmg,
+      headDmg: cfg.headDmg,
+      color: cfg.color,
+      maxPierce: cfg.pierceCount ?? 1,
+      pierced: new Set<EnemyBase>(),
+    });
+  }
+
+  private updateBallisticSniperProjectiles(dt: number): void {
+    if (this.sniperProjectiles.length === 0) return;
+
+    const targets: THREE.Object3D[] = [
+      ...this.mapManager.obstacleMeshes,
+      ...this.enemyManager.enemies.map((e) => e.group),
+    ];
+
+    for (let i = this.sniperProjectiles.length - 1; i >= 0; i--) {
+      const p = this.sniperProjectiles[i];
+      p.life -= dt;
+      const prevPos = p.pos.clone();
+      const stepped = stepBallisticProjectile(p.pos, p.vel, p.gravity, dt);
+      const nextPos = _tmpVec.set(stepped.nextPos.x, stepped.nextPos.y, stepped.nextPos.z);
+      p.vel.set(stepped.nextVel.x, stepped.nextVel.y, stepped.nextVel.z);
+
+      _tmpVec2.subVectors(nextPos, prevPos);
+      const segLen = _tmpVec2.length();
+      let stopProjectile = p.life <= 0 || nextPos.y <= 0.05;
+      let anyHit = false;
+      let anyCrit = false;
+      let anyShieldBlock = false;
+
+      _endPoint.copy(nextPos);
+
+      if (segLen > 0.0001) {
+        const segDir = _tmpVec2.clone().divideScalar(segLen);
+        _raycaster.set(prevPos, segDir);
+        _raycaster.near = 0;
+        _raycaster.far = segLen;
+        const hits = _raycaster.intersectObjects(targets, true);
+        _raycaster.far = Infinity;
+
+        for (let h = 0; h < hits.length; h++) {
+          const hit = hits[h];
+          const data = hit.object.userData as EnemyHitUserData | undefined;
+          if (data && data.enemy) {
+            const enemy = data.enemy;
+            if (p.pierced.has(enemy) || enemy.hp <= 0) continue;
+            p.pierced.add(enemy);
+            _endPoint.copy(hit.point);
+
+            const rawDmg = data.isHead ? p.headDmg : p.dmg;
+            const res = this.applyDamageToEnemy(enemy, rawDmg, hit.point, data.hitZone, p.color);
+            if (res.hit) anyHit = true;
+            if (res.crit) anyCrit = true;
+            if (res.shieldBlock) anyShieldBlock = true;
+
+            if (p.pierced.size >= p.maxPierce) {
+              stopProjectile = true;
+              break;
+            }
+          } else {
+            _endPoint.copy(hit.point);
+            this.pools.spawnExplosion(hit.point, 0xfbbf24, 5, 6);
+            stopProjectile = true;
+            break;
+          }
+        }
+
+        // خط أثر مرئي يوضّح المسار المقوّس للطلقة أثناء طيرانها
+        this.pools.spawnTracer(prevPos, _endPoint, p.color, 0.16, 0.9);
+        p.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), segDir);
+      }
+
+      if (anyCrit) {
+        this.audio.play('headshot');
+        this.showHitmarker(true);
+      } else if (anyShieldBlock) {
+        this.audio.play('shieldBlock');
+        this.showHitmarker(false);
+      } else if (anyHit) {
+        this.audio.play('hit');
+        this.showHitmarker(false);
+      }
+
+      p.pos.copy(nextPos);
+      p.mesh.position.copy(nextPos);
+
+      if (stopProjectile) {
+        (p.mesh.material as THREE.Material).dispose();
+        this.scene.remove(p.mesh);
+        this.sniperProjectiles.splice(i, 1);
+      }
     }
   }
 
@@ -1571,7 +1771,10 @@ export class GameEngine {
     if (document.pointerLockElement !== this.renderer.domElement) return;
     const settings = useGameStore.getState().settings;
     const activeADS = this.isADS && !this.player.isSprinting;
-    const adsMult = activeADS ? (this.weaponManager.current.config.isSniper ? 0.35 : 0.65) : 1.0;
+    // تعديل حساسية الماوس تلقائياً بما يتناسب مع مستوى التكبير الحالي (x4 / x8 / x12) ونمط التصويب
+    const adsMult = activeADS
+      ? this.weaponManager.current.getAdsSensitivityMultiplier(this.camera.fov)
+      : 1.0;
     this.player.look(e.movementX, e.movementY, settings.sensitivity, adsMult);
     this.weaponManager.addMouseSway(e.movementX, e.movementY);
   }
@@ -1602,6 +1805,26 @@ export class GameEngine {
 
   private handleWheel(e: WheelEvent): void {
     if (!this.isPlaying) return;
+    const w = this.weaponManager.current;
+    const activeADS = this.isADS && !this.player.isSprinting;
+    const isScopedSniper =
+      this.empDisabledTimer <= 0 &&
+      activeADS &&
+      w.isSniperWeapon() &&
+      !this.weaponManager.isReloading;
+
+    // أثناء التصويب بمنظار القناصة: عجلة الماوس تغيّر مستوى التكبير (x4 / x8 / x12) بدلاً من تبديل السلاح
+    if (isScopedSniper) {
+      const zoomDelta = e.deltaY < 0 ? 1 : -1;
+      if (w.stepZoom(zoomDelta)) {
+        this.audio.play('step');
+        useGameStore.getState().setHudPatch({
+          scopeZoomLabel: w.getZoomLabel(),
+        });
+      }
+      return;
+    }
+
     const step = e.deltaY > 0 ? 1 : -1;
     if (this.weaponManager.cycleWeapon(step)) {
       this.syncWeaponHud();
@@ -1635,6 +1858,8 @@ export class GameEngine {
     useGameStore.getState().setHudPatch({
       weaponName: w.config.name,
       weaponRole: w.config.roleHint,
+      adsStyle: w.config.adsStyle,
+      scopeZoomLabel: w.getZoomLabel(),
       ammoMag: w.mag,
       ammoReserve: w.reserve,
       isReloading: this.weaponManager.isReloading,
@@ -1647,9 +1872,19 @@ export class GameEngine {
     const w = this.weaponManager.current;
     const activeADS = this.isADS && !this.player.isSprinting;
     const empActive = this.empDisabledTimer > 0;
-    const showScope = !empActive && activeADS && !!w.config.isSniper && !this.weaponManager.isReloading;
+    const showScope = !empActive && activeADS && w.isSniperWeapon() && !this.weaponManager.isReloading;
     const chSpread =
-      (activeADS ? 2 : this.player.isSprinting ? 20 : this.player.isMoving ? 13 : 7) +
+      (activeADS
+        ? w.config.adsStyle === 'tight_choke'
+          ? 6
+          : 2
+        : this.player.isSprinting
+          ? 20
+          : this.player.isMoving
+            ? 13
+            : w.config.adsStyle === 'tight_choke'
+              ? 22
+              : 7) +
       this.weaponManager.weaponKickZ * 90;
 
     useGameStore.getState().setHudPatch({
@@ -1672,6 +1907,13 @@ export class GameEngine {
       empDisabledTimer: Number(this.empDisabledTimer.toFixed(1)),
       weaponName: w.config.name,
       weaponRole: w.config.roleHint,
+      adsStyle: w.config.adsStyle,
+      activeADS,
+      scopeZoomLabel: w.getZoomLabel(),
+      holdBreathRatio:
+        this.player.holdBreath.remaining / PLAYER_CONSTANTS.HOLD_BREATH_MAX_DURATION,
+      holdBreathActive: this.player.holdBreath.isHolding,
+      holdBreathCooldown: Number(this.player.holdBreath.cooldown.toFixed(1)),
       ammoMag: w.mag,
       ammoReserve: w.reserve,
       isReloading: this.weaponManager.isReloading,
@@ -1832,21 +2074,31 @@ export class GameEngine {
         this.fireWeapon();
       }
 
-      // 3. تحديث زاوية رؤية الكاميرا (FOV للركض 84 / المنظار / الاندفاع — مع تعطيل المنظار أثناء الـ EMP)
+      // 3. تحديث زاوية رؤية الكاميرا السلسة (بما فيها تكبير المنظار x4/x8/x12) واهتزاز المنظار وحبس النفس
+      const activeWeapon = this.weaponManager.current;
       const empActive = this.empDisabledTimer > 0;
-      const effectiveAdsFov = empActive && wCfg.isSniper ? 62 : wCfg.adsFov;
+      const effectiveAdsFov = activeWeapon.getEffectiveAdsFov(empActive);
       const targetFov = activeADS
         ? effectiveAdsFov
         : this.player.dashTimer > 0
           ? 87
           : this.player.isSprinting || this.player.isSliding
             ? 84
-            : 75;
+            : PLAYER_CONSTANTS.BASE_HIP_FOV;
       this.camera.fov += (targetFov - this.camera.fov) * (1 - Math.exp(-12 * rawDt));
       this.camera.updateProjectionMatrix();
 
-      const showScope = !empActive && activeADS && !!wCfg.isSniper && !this.weaponManager.isReloading;
+      const showScope =
+        !empActive && activeADS && activeWeapon.isSniperWeapon() && !this.weaponManager.isReloading;
       this.weaponManager.pivot.visible = !showScope;
+
+      const holdingShift = !!(this.keys['ShiftLeft'] || this.keys['ShiftRight']);
+      this.player.updateScopeSway(
+        rawDt,
+        showScope,
+        holdingShift,
+        activeWeapon.getScopeSwayAmplitude(),
+      );
 
       // 4. إدارة الموجات وتوليد الأعداء
       if (this.waveDelay > 0) {
@@ -1942,7 +2194,9 @@ export class GameEngine {
         this.waveSpawnModifiers,
       );
 
-      // 6. تحديث صواريخ اللاعب (RPG) مع دقة إصابة محسّنة للأهداف الطائرة والزعماء
+      // 6. تحديث مقذوفات القناصة الواقعية (عند تفعيل خيار البالستية) وصواريخ اللاعب (RPG)
+      this.updateBallisticSniperProjectiles(dt);
+
       for (let i = this.playerRockets.length - 1; i >= 0; i--) {
         const r = this.playerRockets[i];
         r.life -= dt;
@@ -2120,6 +2374,7 @@ export class GameEngine {
     this.pickupRingGeo.dispose();
     this.rocketBodyGeo.dispose();
     this.rocketNoseGeo.dispose();
+    this.sniperBoltGeo.dispose();
     this.grenadeGeo.dispose();
 
     this.enemyManager.dispose();

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   BOSS_ROTATION,
+  DEFAULT_SETTINGS,
   ELITE_AFFIXES,
   PLAYER_CONSTANTS,
   WAVE_MUTATORS,
@@ -14,6 +15,7 @@ import {
   computeKillPoints,
   computeSlideSpeed,
   computeWaveEnemyCount,
+  computeZoomSensitivityMultiplier,
   getBossArchetypeMeta,
   getKillStreakReward,
   getMapDisplayName,
@@ -22,6 +24,8 @@ import {
   pickEnemyTypeForWave,
   pickWaveMutator,
   rollEliteAffix,
+  stepBallisticProjectile,
+  stepHoldBreathState,
 } from './rules';
 
 /* ==========================================
@@ -254,4 +258,54 @@ test('أسماء الخرائط الست وحساب الجاذبية المنخ�
   assert.equal(computeEffectiveFogDensity(0.005, null, false), 0.005);
   assert.equal(computeEffectiveFogDensity(0.005, 0.028, false), 0.028);
   assert.equal(computeEffectiveFogDensity(0.005, 0.028, true), 0.048);
+});
+
+test('تدرّج حساسية الماوس مع مستويات التكبير (x4/x8/x12) وحبس النفس 3ث مع تهدئة والبالستية الواقعية', () => {
+  // إعداد البالستية الواقعية معطّل افتراضياً
+  assert.equal(DEFAULT_SETTINGS.realisticBallistics, false);
+
+  // حساسية الماوس تنخفض تناسبياً كلما ارتفع التكبير (انخفضت زاوية الرؤية FOV)
+  const sensHip = computeZoomSensitivityMultiplier(75, 75);
+  const sens4x = computeZoomSensitivityMultiplier(22, 75);
+  const sens8x = computeZoomSensitivityMultiplier(12, 75);
+  const sens12x = computeZoomSensitivityMultiplier(7.5, 75);
+  assert.equal(sensHip, 1);
+  assert.ok(sens4x < sensHip && sens8x < sens4x && sens12x < sens8x);
+  assert.ok(sens12x >= 0.06);
+
+  // حبس النفس يقلّص الاهتزاز، ينفد عند 3 ثوانٍ بالضبط ويدخل تهدئة تمنع إعادة التفعيل
+  let breath = {
+    remaining: PLAYER_CONSTANTS.HOLD_BREATH_MAX_DURATION,
+    cooldown: 0,
+    recoverDelay: 0,
+    isHolding: false,
+  };
+  let step = stepHoldBreathState(breath, 1.5, true, true);
+  assert.equal(step.next.isHolding, true);
+  assert.equal(step.swayMult, PLAYER_CONSTANTS.HOLD_BREATH_SWAY_MULT);
+  assert.ok(Math.abs(step.next.remaining - 1.5) < 0.001);
+
+  // استهلاك بقية الـ 3 ثوانٍ يدخل فترة التهدئة
+  step = stepHoldBreathState(step.next, 1.5, true, true);
+  assert.equal(step.next.isHolding, false);
+  assert.equal(step.next.cooldown, PLAYER_CONSTANTS.HOLD_BREATH_COOLDOWN);
+  assert.equal(step.swayMult, 1.0);
+
+  // أثناء التهدئة لا يعمل حبس النفس حتى تنتهي التهدئة
+  step = stepHoldBreathState(step.next, 2.0, true, true);
+  assert.equal(step.next.isHolding, false);
+  assert.ok(step.next.cooldown > 0);
+
+  // بعد انتهاء التهدئة يعود النفس كاملاً وقابلاً للاستخدام
+  step = stepHoldBreathState(step.next, 2.1, true, false);
+  assert.equal(step.next.cooldown, 0);
+  assert.equal(step.next.remaining, PLAYER_CONSTANTS.HOLD_BREATH_MAX_DURATION);
+
+  // فيزياء المقذوف الواقعي للقناصة: انتقال مع زمن الوصول وسقوط خفيف بالجاذبية
+  const p0 = { x: 0, y: 2, z: 0 };
+  const v0 = { x: 0, y: 0, z: -200 };
+  const moved = stepBallisticProjectile(p0, v0, 8.0, 0.5);
+  assert.equal(moved.nextPos.z, -100);
+  assert.equal(moved.nextVel.y, -4.0);
+  assert.equal(moved.nextPos.y, 1.0); // 2 - 0.5 * 8 * 0.5^2 = 1.0
 });

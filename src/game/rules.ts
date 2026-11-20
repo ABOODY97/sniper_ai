@@ -65,6 +65,12 @@ export const PLAYER_CONSTANTS = {
   KAMIKAZE_BLAST_RADIUS: 4.8,
   KAMIKAZE_BLAST_DAMAGE: 28,
   ENGINEER_SHIELD_DR_MULT: 0.45,
+  BASE_HIP_FOV: 75,
+  HOLD_BREATH_MAX_DURATION: 3.0,
+  HOLD_BREATH_COOLDOWN: 4.0,
+  HOLD_BREATH_RECOVER_RATE: 0.85,
+  HOLD_BREATH_RECOVER_DELAY: 0.45,
+  HOLD_BREATH_SWAY_MULT: 0.14,
 } as const;
 
 export const STORAGE_KEYS = {
@@ -78,6 +84,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   volume: 0.8,
   muted: false,
   quality: 'high',
+  realisticBallistics: false,
 };
 
 export interface EliteAffixMeta {
@@ -468,6 +475,10 @@ export function loadSettings(): GameSettings {
       volume: typeof parsed.volume === 'number' ? Math.max(0, Math.min(1, parsed.volume)) : DEFAULT_SETTINGS.volume,
       muted: typeof parsed.muted === 'boolean' ? parsed.muted : DEFAULT_SETTINGS.muted,
       quality: parsed.quality === 'low' ? 'low' : 'high',
+      realisticBallistics:
+        typeof parsed.realisticBallistics === 'boolean'
+          ? parsed.realisticBallistics
+          : DEFAULT_SETTINGS.realisticBallistics,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -520,4 +531,92 @@ export function computeEffectiveFogDensity(
   const activeBase = weatherDensity !== null ? Math.max(baseDensity, weatherDensity) : baseDensity;
   if (!hasHeavyFogMutator) return activeBase;
   return Math.max(activeBase, baseDensity * 2.8, 0.048);
+}
+
+/** حساب مضاعف حساسية الماوس المتناسب فيزيائياً مع زاوية الرؤية الحالية للتكبير (x4 / x8 / x12) */
+export function computeZoomSensitivityMultiplier(
+  targetFovDeg: number,
+  baseHipFovDeg: number = PLAYER_CONSTANTS.BASE_HIP_FOV,
+): number {
+  const safeFov = Math.max(4, Math.min(baseHipFovDeg, targetFovDeg));
+  const halfTargetRad = (safeFov * Math.PI) / 360;
+  const halfBaseRad = (baseHipFovDeg * Math.PI) / 360;
+  const ratio = Math.tan(halfTargetRad) / Math.tan(halfBaseRad);
+  return Math.max(0.06, Math.min(1.0, ratio));
+}
+
+export interface HoldBreathState {
+  remaining: number;
+  cooldown: number;
+  recoverDelay: number;
+  isHolding: boolean;
+}
+
+/** تحديث حالة حبس النفس أثناء التصويب بالمنظار (حد أقصى 3 ثوانٍ مع فترة تهدئة عند النفاد) */
+export function stepHoldBreathState(
+  state: HoldBreathState,
+  dt: number,
+  isScoped: boolean,
+  holdingShift: boolean,
+): { next: HoldBreathState; swayMult: number } {
+  const maxDur = PLAYER_CONSTANTS.HOLD_BREATH_MAX_DURATION;
+  const cdDur = PLAYER_CONSTANTS.HOLD_BREATH_COOLDOWN;
+  let { remaining, cooldown, recoverDelay } = state;
+  let isHolding = false;
+
+  if (cooldown > 0) {
+    cooldown = Math.max(0, cooldown - dt);
+    if (cooldown <= 0) {
+      remaining = maxDur;
+      recoverDelay = 0;
+    } else {
+      remaining = maxDur * (1 - cooldown / cdDur);
+    }
+  } else if (isScoped && holdingShift && remaining > 0) {
+    isHolding = true;
+    remaining = Math.max(0, remaining - dt);
+    recoverDelay = PLAYER_CONSTANTS.HOLD_BREATH_RECOVER_DELAY;
+    if (remaining <= 0) {
+      remaining = 0;
+      cooldown = cdDur;
+      isHolding = false;
+    }
+  } else {
+    if (recoverDelay > 0) {
+      recoverDelay = Math.max(0, recoverDelay - dt);
+    } else if (remaining < maxDur) {
+      remaining = Math.min(maxDur, remaining + PLAYER_CONSTANTS.HOLD_BREATH_RECOVER_RATE * dt);
+    }
+  }
+
+  return {
+    next: { remaining, cooldown, recoverDelay, isHolding },
+    swayMult: isHolding ? PLAYER_CONSTANTS.HOLD_BREATH_SWAY_MULT : 1.0,
+  };
+}
+
+/** خطوة فيزيائية لطلقة قناصة بفيزياء واقعية (سرعة مقذوف + انحناء خفيف بالجاذبية) */
+export function stepBallisticProjectile(
+  pos: { x: number; y: number; z: number },
+  vel: { x: number; y: number; z: number },
+  gravity: number,
+  dt: number,
+): {
+  nextPos: { x: number; y: number; z: number };
+  nextVel: { x: number; y: number; z: number };
+} {
+  const nextVy = vel.y - gravity * dt;
+  const avgVy = (vel.y + nextVy) * 0.5;
+  return {
+    nextPos: {
+      x: pos.x + vel.x * dt,
+      y: pos.y + avgVy * dt,
+      z: pos.z + vel.z * dt,
+    },
+    nextVel: {
+      x: vel.x,
+      y: nextVy,
+      z: vel.z,
+    },
+  };
 }

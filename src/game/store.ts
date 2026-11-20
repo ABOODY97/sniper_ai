@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type {
+  AdsStyle,
   BossHudState,
   EndRunSummary,
   GameScreenState,
@@ -81,10 +82,16 @@ export interface GameStoreState {
   reloadHint: string;
   weaponSlots: WeaponSlotUI[];
 
-  // التصويب والمؤثرات البصرية
+  // التصويب والمؤثرات البصرية (أنماط ADS، تكبير المنظار، وحبس النفس)
   crosshairSpread: number;
+  activeADS: boolean;
+  adsStyle: AdsStyle;
   showScope: boolean;
   thermalScope: boolean;
+  scopeZoomLabel: string;
+  holdBreathRatio: number;
+  holdBreathActive: boolean;
+  holdBreathCooldown: number;
   hitmarkerVisible: boolean;
   hitmarkerCrit: boolean;
   damageFlash: boolean;
@@ -184,8 +191,14 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   ],
 
   crosshairSpread: 7,
+  activeADS: false,
+  adsStyle: 'red_dot',
   showScope: false,
   thermalScope: false,
+  scopeZoomLabel: 'x4',
+  holdBreathRatio: 1,
+  holdBreathActive: false,
+  holdBreathCooldown: 0,
   hitmarkerVisible: false,
   hitmarkerCrit: false,
   damageFlash: false,
