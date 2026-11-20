@@ -243,6 +243,15 @@ export class AudioManager {
       case 'step':
         this.playNoiseBurst(0.04, 240, 0.04, 1.2);
         break;
+      case 'empWarn':
+        this.playTone('sine', 620, 1480, 0.32, 0.16, 0);
+        this.playTone('triangle', 920, 1840, 0.28, 0.14, 0.36);
+        break;
+      case 'empBlast':
+        this.playNoiseBurst(0.42, 1100, 0.34, 1.4);
+        this.playTone('sawtooth', 760, 48, 0.45, 0.28);
+        this.playTone('sine', 160, 32, 0.5, 0.32);
+        break;
       case 'wave':
         this.playTone('sawtooth', 220, 330, 0.4, 0.14, 0);
         this.playTone('sawtooth', 330, 440, 0.5, 0.14, 0.22);

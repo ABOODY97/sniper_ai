@@ -81,6 +81,34 @@ export function updateGroundEnemyMovement(
     else if (dist < 6) _moveVec.sub(_dir);
     _perp.set(-_dir.z * enemy.strafeDir, 0, _dir.x * enemy.strafeDir);
     _moveVec.addScaledVector(_perp, 0.35);
+  } else if (type === 'jammer') {
+    // المشوِّش يحافظ على مسافة قريبة من نطاق نبضة الـ EMP (18 وحدة) مع مناورة مستمرة
+    const minD = enemy.config.minDist ?? 9;
+    const maxD = enemy.config.maxDist ?? 15;
+    if (dist > maxD) _moveVec.add(_dir);
+    else if (dist < minD) _moveVec.sub(_dir);
+
+    enemy.strafeTimer -= dt;
+    if (enemy.strafeTimer <= 0) {
+      enemy.strafeDir *= -1;
+      enemy.strafeTimer = 1.8 + Math.random() * 1.8;
+    }
+    _perp.set(-_dir.z * enemy.strafeDir, 0, _dir.x * enemy.strafeDir);
+    _moveVec.addScaledVector(_perp, 0.7);
+  } else if (type === 'ghost') {
+    // الشبح يناور بسرعة عالية ويلتف حول اللاعب من الأجنحة
+    const minD = enemy.config.minDist ?? 8;
+    const maxD = enemy.config.maxDist ?? 16;
+    if (dist > maxD) _moveVec.add(_dir);
+    else if (dist < minD) _moveVec.sub(_dir);
+
+    enemy.strafeTimer -= dt;
+    if (enemy.strafeTimer <= 0) {
+      enemy.strafeDir *= -1;
+      enemy.strafeTimer = 1.2 + Math.random() * 1.4;
+    }
+    _perp.set(-_dir.z * enemy.strafeDir, 0, _dir.x * enemy.strafeDir);
+    _moveVec.addScaledVector(_perp, 1.15);
   } else {
     // المقتحم يندفع مباشرة نحو اللاعب، بينما الجندي والمدرع الثقيل يحافظان على مسافة اشتباك متوسطة
     if (!enemy.config.shoots || dist > 15) {

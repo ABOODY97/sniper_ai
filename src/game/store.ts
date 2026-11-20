@@ -8,6 +8,7 @@ import type {
   MapId,
   RadarSnapshot,
   UpgradeOption,
+  WaveMutatorInfo,
   WeaponSlotUI,
 } from './types';
 import { loadRecords, loadSettings, saveSettings } from './rules';
@@ -89,13 +90,16 @@ export interface GameStoreState {
   damageFlash: boolean;
   slowMoActive: boolean;
 
-  // الكومبو والباس والإعلانات
+  // الكومبو والباس والإعلانات والتشويش ومعدِّلات الموجة
   comboCount: number;
   comboRatio: number;
   boss: BossHudState;
   bannerText: string;
   bannerColor: string;
   bannerVisible: boolean;
+  empDisabledTimer: number;
+  activeMutator: WaveMutatorInfo | null;
+  mutatorBannerVisible: boolean;
   killFeed: KillFeedItem[];
 
   // شاشة الترقيات وشاشة النهاية
@@ -197,6 +201,9 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   bannerText: '',
   bannerColor: '#38bdf8',
   bannerVisible: false,
+  empDisabledTimer: 0,
+  activeMutator: null,
+  mutatorBannerVisible: false,
   killFeed: [],
 
   upgradeWaveCleared: 1,

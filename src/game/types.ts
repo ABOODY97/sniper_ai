@@ -18,7 +18,20 @@ export type EnemyTypeId =
   | 'drone'
   | 'shielded'
   | 'mortar'
+  | 'jammer'
+  | 'ghost'
   | 'boss';
+
+export type EliteAffixId = 'explosive' | 'swift' | 'regenerating' | 'armored';
+
+export type WaveMutatorId = 'heavy_fog' | 'low_gravity' | 'fast_fragile' | 'double_headshot';
+
+export interface WaveMutatorInfo {
+  id: WaveMutatorId;
+  name: string;
+  description: string;
+  color: string;
+}
 
 export type HitZone = 'body' | 'head' | 'shield' | 'generator';
 

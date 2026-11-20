@@ -6,9 +6,11 @@ import type {
   MapId,
   RadarEntity,
   UpgradeOption,
+  WaveMutatorInfo,
 } from './types';
 import { useGameStore } from './store';
 import {
+  ELITE_AFFIXES,
   PLAYER_CONSTANTS,
   computeComboMultiplier,
   computeHitDamage,
@@ -16,13 +18,14 @@ import {
   computeWaveEnemyCount,
   getKillStreakReward,
   pickEnemyTypeForWave,
+  pickWaveMutator,
   saveRecords,
 } from './rules';
 import { AudioManager } from './audio/AudioManager';
 import { ObjectPools } from './pools/ObjectPools';
 import { MapManager } from './maps/MapManager';
 import { WeaponManager } from './weapons/WeaponManager';
-import { EnemyManager } from './enemies/EnemyManager';
+import { EnemyManager, type EnemySpawnModifiers } from './enemies/EnemyManager';
 import type { EnemyBase, EnemyHitUserData } from './enemies/EnemyBase';
 import { BossEnemy } from './boss/Boss';
 import { Player } from './Player';
@@ -136,18 +139,23 @@ export class GameEngine {
   private waveDelay = 0;
   private pendingUpgrade = false;
 
-  // الكومبو، سلسلة القتل، اللقطة البطيئة، وتجميد الصدمات (Hitstop)
+  // الكومبو، سلسلة القتل، اللقطة البطيئة، تجميد الصدمات، تشويش EMP، ومعدِّل الموجة
   private comboCount = 0;
   private comboTimer = 0;
   private killStreak = 0;
   private furyTimer = 0;
   private slowMoTimer = 0;
   private hitstopTimer = 0;
+  private empDisabledTimer = 0;
+  private activeMutator: WaveMutatorInfo | null = null;
+  private headshotDamageMult = 1.0;
+  private waveSpawnModifiers: EnemySpawnModifiers | undefined = undefined;
 
   // مؤقتات الإشعارات البصرية
   private hitmarkerTimeout: number | null = null;
   private damageFlashTimeout: number | null = null;
   private bannerTimeout: number | null = null;
+  private mutatorBannerTimeout: number | null = null;
 
   // خيارات الترقيات المتاحة
   private readonly upgradePool: UpgradeDefinition[];
@@ -343,8 +351,10 @@ export class GameEngine {
       const mapParam = params.get('map');
       const targetMap: MapId =
         mapParam === 'city' || mapParam === 'desert' || mapParam === 'lab' ? mapParam : initialMap;
+      const waveParam = parseInt(params.get('wave') || '1', 10);
+      const startWaveNum = Number.isFinite(waveParam) && waveParam >= 1 ? waveParam : 1;
       useGameStore.getState().setSelectedMap(targetMap);
-      this.startMission(targetMap, false);
+      this.startMission(targetMap, false, startWaveNum);
     } else {
       useGameStore.getState().setScreen('title');
       // وضع الكاميرا على زاوية البداية الاستعراضية قبل أول رسم فوري
@@ -387,7 +397,7 @@ export class GameEngine {
   }
 
   /** بدء مهمة جديدة (أو متابعة جلسة حالية) */
-  public startMission(mapId?: MapId, tryPointerLock = true): void {
+  public startMission(mapId?: MapId, tryPointerLock = true, initialWave = 1): void {
     if (tryPointerLock) {
       this.audio.init();
       this.audio.resume();
@@ -397,7 +407,7 @@ export class GameEngine {
     }
 
     const chosenMap = mapId ?? useGameStore.getState().selectedMap;
-    this.resetRun(chosenMap);
+    this.resetRun(chosenMap, initialWave);
 
     this.hasActiveSession = true;
     this.isPlaying = true;
@@ -502,14 +512,15 @@ export class GameEngine {
   }
 
   /** إعادة تهيئة كاملة لجولة لعب جديدة */
-  private resetRun(mapId: MapId): void {
+  private resetRun(mapId: MapId, initialWave = 1): void {
     this.clearDynamicWorldEntities();
     this.mapManager.loadMap(mapId);
     this.player.reset();
     this.weaponManager.reset();
+    this.weaponManager.pivot.visible = true;
 
     this.score = 0;
-    this.wave = 1;
+    this.wave = initialWave;
     this.kills = 0;
     this.headshots = 0;
     this.bossKills = 0;
@@ -519,21 +530,32 @@ export class GameEngine {
     this.furyTimer = 0;
     this.slowMoTimer = 0;
     this.hitstopTimer = 0;
+    this.empDisabledTimer = 0;
+    this.activeMutator = null;
+    this.headshotDamageMult = 1.0;
+    this.waveSpawnModifiers = undefined;
     this.waveDelay = 0;
     this.pendingUpgrade = false;
     this.isGameOver = false;
     this.pointerWasLocked = false;
+    if (this.mutatorBannerTimeout !== null) {
+      window.clearTimeout(this.mutatorBannerTimeout);
+      this.mutatorBannerTimeout = null;
+    }
 
     useGameStore.getState().clearKillFeed();
     useGameStore.getState().setHudPatch({
       score: 0,
-      wave: 1,
+      wave: initialWave,
       kills: 0,
       headshots: 0,
       comboCount: 0,
       comboRatio: 0,
       killStreak: 0,
       furyTimer: 0,
+      empDisabledTimer: 0,
+      activeMutator: null,
+      mutatorBannerVisible: false,
       slowMoActive: false,
       damageFlash: false,
       showScope: false,
@@ -541,7 +563,7 @@ export class GameEngine {
       boss: { active: false, name: '', phase: 1, hp: 0, maxHp: 1 },
     });
 
-    this.startWave(1);
+    this.startWave(initialWave);
     this.syncHudImmediate();
   }
 
@@ -605,6 +627,57 @@ export class GameEngine {
     }, 110);
   }
 
+  private applyWaveMutator(mutator: WaveMutatorInfo | null): void {
+    // إعادة ضبط تأثيرات معدِّل الموجة السابقة قبل تطبيق المعدِّل الجديد
+    this.activeMutator = mutator;
+    this.mapManager.setFogMultiplier(1.0);
+    this.player.gravityMult = 1.0;
+    this.headshotDamageMult = 1.0;
+    this.waveSpawnModifiers = undefined;
+
+    if (this.mutatorBannerTimeout !== null) {
+      window.clearTimeout(this.mutatorBannerTimeout);
+      this.mutatorBannerTimeout = null;
+    }
+
+    if (!mutator) {
+      useGameStore.getState().setHudPatch({
+        activeMutator: null,
+        mutatorBannerVisible: false,
+      });
+      return;
+    }
+
+    switch (mutator.id) {
+      case 'heavy_fog':
+        this.mapManager.setFogMultiplier(2.8, 0.048);
+        break;
+      case 'low_gravity':
+        this.player.gravityMult = 0.45;
+        break;
+      case 'fast_fragile':
+        this.waveSpawnModifiers = { speedMult: 1.45, hpMult: 0.6 };
+        break;
+      case 'double_headshot':
+        this.headshotDamageMult = 2.0;
+        break;
+    }
+
+    useGameStore.getState().setHudPatch({
+      activeMutator: mutator,
+      mutatorBannerVisible: true,
+    });
+    useGameStore
+      .getState()
+      .pushKillFeed(`🌀 معدِّل الموجة ${this.wave}: ${mutator.name}`, false, true);
+
+    // عرض إعلان معدِّل الموجة بالعربية على الشاشة لمدة 4 ثوانٍ
+    this.mutatorBannerTimeout = window.setTimeout(() => {
+      useGameStore.getState().setHudPatch({ mutatorBannerVisible: false });
+      this.mutatorBannerTimeout = null;
+    }, PLAYER_CONSTANTS.MUTATOR_BANNER_DURATION_MS);
+  }
+
   private startWave(w: number): void {
     this.wave = w;
     // منح قنبلة يدوية إضافية مع بداية كل موجة بعد الأولى
@@ -612,10 +685,20 @@ export class GameEngine {
       this.player.grenades = Math.min(this.player.maxGrenades, this.player.grenades + 1);
     }
 
+    // تطبيق معدِّل عشوائي بدءاً من الموجة 3 وكل 3 موجات (3، 6، 9، ...)
+    const mutator = pickWaveMutator(w, Math.random());
+    this.applyWaveMutator(mutator);
+
     if (w % 5 === 0) {
       this.waveToSpawn = 0;
       this.waveEnemiesRemaining = 1;
-      const boss = this.enemyManager.spawn('boss', w, this.camera.position);
+      const boss = this.enemyManager.spawn(
+        'boss',
+        w,
+        this.camera.position,
+        undefined,
+        this.waveSpawnModifiers,
+      );
       if (boss) this.syncBossHud(boss as BossEnemy);
       this.showBanner(`☠️ تحذير: الباس قادم! (الموجة ${w})`, '#ef4444');
       this.audio.play('bossRoar');
@@ -832,6 +915,11 @@ export class GameEngine {
   ): { hit: boolean; crit: boolean; shieldBlock: boolean } {
     if (enemy.hp <= 0) return { hit: false, crit: false, shieldBlock: false };
 
+    // كشف الشبح بالكامل لمدة ثانيتين عند تعرضه لأي إصابة
+    if (enemy.config.type === 'ghost') {
+      enemy.reveal(PLAYER_CONSTANTS.GHOST_REVEAL_DURATION);
+    }
+
     const result = computeHitDamage({
       enemyType: enemy.config.type,
       rawDmg,
@@ -839,6 +927,8 @@ export class GameEngine {
       hitZone,
       currentHp: enemy.hp,
       instantHeadshotKill: enemy.config.instantHeadshotKill,
+      eliteAffix: enemy.eliteAffix,
+      headshotMult: this.headshotDamageMult,
     });
 
     if (result.isShieldBlock) {
@@ -1063,10 +1153,27 @@ export class GameEngine {
 
     const dropOrigin = enemy.group.position.clone();
     const enemyName = enemy.config.name;
-    const enemyBaseScore = enemy.config.score;
+    const enemyBaseScore = enemy.getScoreValue();
     const enemyType = enemy.config.type;
+    const eliteAffix = enemy.eliteAffix;
 
     this.enemyManager.removeEnemy(enemy);
+
+    // انفجار عدو النخبة ذو صفة "متفجر عند الموت"
+    if (eliteAffix === 'explosive') {
+      this.audio.play('grenadeBoom');
+      this.pools.spawnExplosion(pos, 0xf97316, 30, 16);
+      this.pools.spawnExplosion(pos, 0xfef08a, 16, 12);
+      this.player.camShake = Math.max(this.player.camShake, 0.085);
+      const distToPlayer = this.camera.position.distanceTo(pos);
+      if (distToPlayer <= PLAYER_CONSTANTS.ELITE_EXPLOSION_RADIUS) {
+        const falloff = 1 - 0.45 * (distToPlayer / PLAYER_CONSTANTS.ELITE_EXPLOSION_RADIUS);
+        this.handlePlayerDamage(Math.round(PLAYER_CONSTANTS.ELITE_EXPLOSION_DAMAGE * falloff), 3.5);
+      }
+      useGameStore
+        .getState()
+        .pushKillFeed(`💥 انفجار نخبة (${enemyName}) عند الموت!`, true, true);
+    }
 
     // تحديث الكومبو وسلسلة القتل
     this.kills++;
@@ -1090,14 +1197,19 @@ export class GameEngine {
     this.waveEnemiesRemaining = Math.max(0, this.waveEnemiesRemaining - 1);
 
     const multTag = comboMult > 1 ? ` [x${comboMult}]` : '';
+    const eliteTag = eliteAffix ? ` ★ نخبة (${ELITE_AFFIXES[eliteAffix].name})` : '';
     if (isBoss) {
       useGameStore.getState().pushKillFeed(`🏆 تم القضاء على الباس! +${totalPts}${multTag}`, true, true);
     } else if (isHead) {
-      useGameStore.getState().pushKillFeed(`🎯 إصابة بالرأس (${enemyName}) +${totalPts}${multTag}`, true);
+      useGameStore.getState().pushKillFeed(`🎯 إصابة بالرأس (${enemyName}${eliteTag}) +${totalPts}${multTag}`, true);
     } else if (isGenerator) {
-      useGameStore.getState().pushKillFeed(`⚡ تدمير مولّد (${enemyName}) +${totalPts}${multTag}`, true);
+      useGameStore.getState().pushKillFeed(`⚡ تدمير مولّد (${enemyName}${eliteTag}) +${totalPts}${multTag}`, true);
+    } else if (enemyType === 'jammer') {
+      useGameStore.getState().pushKillFeed(`📡 تعطيل ${enemyName}${eliteTag} +${totalPts}${multTag}`, false, !!eliteAffix);
+    } else if (enemyType === 'ghost') {
+      useGameStore.getState().pushKillFeed(`👻 كشف وتصفية ${enemyName}${eliteTag} +${totalPts}${multTag}`, false, !!eliteAffix);
     } else {
-      useGameStore.getState().pushKillFeed(`قضاء على ${enemyName} +${totalPts}${multTag}`, false);
+      useGameStore.getState().pushKillFeed(`قضاء على ${enemyName}${eliteTag} +${totalPts}${multTag}`, false, !!eliteAffix);
     }
 
     // مكافآت سلسلة القتل (5 / 10 / 15)
@@ -1421,7 +1533,8 @@ export class GameEngine {
   private syncHudImmediate(): void {
     const w = this.weaponManager.current;
     const activeADS = this.isADS && !this.player.isSprinting;
-    const showScope = activeADS && !!w.config.isSniper && !this.weaponManager.isReloading;
+    const empActive = this.empDisabledTimer > 0;
+    const showScope = !empActive && activeADS && !!w.config.isSniper && !this.weaponManager.isReloading;
     const chSpread =
       (activeADS ? 2 : this.player.isSprinting ? 20 : this.player.isMoving ? 13 : 7) +
       this.weaponManager.weaponKickZ * 90;
@@ -1443,6 +1556,7 @@ export class GameEngine {
       maxGrenades: this.player.maxGrenades,
       grenadeCooldown: Number(this.player.grenadeCooldown.toFixed(1)),
       furyTimer: Number(this.furyTimer.toFixed(1)),
+      empDisabledTimer: Number(this.empDisabledTimer.toFixed(1)),
       weaponName: w.config.name,
       weaponRole: w.config.roleHint,
       ammoMag: w.mag,
@@ -1551,6 +1665,9 @@ export class GameEngine {
       if (this.furyTimer > 0) {
         this.furyTimer = Math.max(0, this.furyTimer - rawDt);
       }
+      if (this.empDisabledTimer > 0) {
+        this.empDisabledTimer = Math.max(0, this.empDisabledTimer - rawDt);
+      }
 
       // 1. تحديث اللاعب (الحركة، الركض، التزحلق، الاندفاع، الدرع)
       const { activeADS } = this.player.update(
@@ -1582,9 +1699,11 @@ export class GameEngine {
         this.fireWeapon();
       }
 
-      // 3. تحديث زاوية رؤية الكاميرا (FOV للركض 84 / المنظار / الاندفاع)
+      // 3. تحديث زاوية رؤية الكاميرا (FOV للركض 84 / المنظار / الاندفاع — مع تعطيل المنظار أثناء الـ EMP)
+      const empActive = this.empDisabledTimer > 0;
+      const effectiveAdsFov = empActive && wCfg.isSniper ? 62 : wCfg.adsFov;
       const targetFov = activeADS
-        ? wCfg.adsFov
+        ? effectiveAdsFov
         : this.player.dashTimer > 0
           ? 87
           : this.player.isSprinting || this.player.isSliding
@@ -1593,7 +1712,7 @@ export class GameEngine {
       this.camera.fov += (targetFov - this.camera.fov) * (1 - Math.exp(-12 * rawDt));
       this.camera.updateProjectionMatrix();
 
-      const showScope = activeADS && !!wCfg.isSniper && !this.weaponManager.isReloading;
+      const showScope = !empActive && activeADS && !!wCfg.isSniper && !this.weaponManager.isReloading;
       this.weaponManager.pivot.visible = !showScope;
 
       // 4. إدارة الموجات وتوليد الأعداء
@@ -1611,7 +1730,15 @@ export class GameEngine {
         this.spawnCooldown -= dt;
         if (this.spawnCooldown <= 0 && this.enemyManager.enemies.length < PLAYER_CONSTANTS.MAX_ENEMIES) {
           const enemyType = pickEnemyTypeForWave(this.wave, Math.random());
-          if (this.enemyManager.spawn(enemyType, this.wave, this.camera.position)) {
+          if (
+            this.enemyManager.spawn(
+              enemyType,
+              this.wave,
+              this.camera.position,
+              undefined,
+              this.waveSpawnModifiers,
+            )
+          ) {
             this.waveToSpawn--;
             this.spawnCooldown = Math.max(0.55, 1.5 - this.wave * 0.08);
           }
@@ -1630,12 +1757,24 @@ export class GameEngine {
           addCameraShake: (amt) => {
             this.player.camShake = Math.max(this.player.camShake, amt);
           },
-          notifyFeed: (text, isHs) => useGameStore.getState().pushKillFeed(text, !!isHs),
+          notifyFeed: (text, isHs, isHighlight) =>
+            useGameStore.getState().pushKillFeed(text, !!isHs, !!isHighlight),
           onMinionsSummoned: (count) => {
             this.waveEnemiesRemaining += count;
             useGameStore.getState().setHudPatch({ enemiesLeft: this.waveEnemiesRemaining });
           },
+          onEmpHitPlayer: (durationSec) => {
+            this.empDisabledTimer = Math.max(this.empDisabledTimer, durationSec);
+            useGameStore.getState().setHudPatch({
+              empDisabledTimer: Number(this.empDisabledTimer.toFixed(1)),
+              showScope: false,
+            });
+            useGameStore
+              .getState()
+              .pushKillFeed('⚡ تشويش EMP من المشوِّش! (المنظار والرادار معطّلان 3ث)', true, true);
+          },
         },
+        this.waveSpawnModifiers,
       );
 
       // 6. تحديث صواريخ اللاعب (RPG)
@@ -1792,6 +1931,7 @@ export class GameEngine {
     if (this.hitmarkerTimeout !== null) window.clearTimeout(this.hitmarkerTimeout);
     if (this.damageFlashTimeout !== null) window.clearTimeout(this.damageFlashTimeout);
     if (this.bannerTimeout !== null) window.clearTimeout(this.bannerTimeout);
+    if (this.mutatorBannerTimeout !== null) window.clearTimeout(this.mutatorBannerTimeout);
 
     window.removeEventListener('resize', this.onResizeBound);
     window.removeEventListener('keydown', this.onKeyDownBound);

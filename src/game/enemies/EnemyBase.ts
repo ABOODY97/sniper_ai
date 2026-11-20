@@ -1,8 +1,10 @@
 import * as THREE from 'three';
-import type { EnemyTypeId, HitZone } from '../types';
+import type { EliteAffixId, EnemyTypeId, HitZone } from '../types';
+import { ELITE_AFFIXES, PLAYER_CONSTANTS } from '../rules';
 
 /* ==========================================
    الفئة الأساسية للأعداء والنماذج ثلاثية الأبعاد والظلال الأرضية
+   ودعم أعداء النخبة (توهج محيطي + اسم الصفة فوق العدو) والتخفي والتشويش
    ========================================== */
 
 export interface EnemyConfig {
@@ -13,6 +15,7 @@ export interface EnemyConfig {
   instantHeadshotKill?: boolean;
   flying?: boolean;
   isBoss?: boolean;
+  hiddenFromRadar?: boolean;
   speed: number;
   color: number;
   visor: number;
@@ -82,6 +85,11 @@ export function disposeEnemySharedGeometries(shared: EnemySharedGeometries): voi
   shared.shadowMat.dispose();
 }
 
+/** دالة فارغة لمنع التقاط أشعة التصويب من الطبقات التجميلية (شريط الصحة، الهالة، اسم النخبة) */
+const noopRaycast = (): void => {
+  /* تجاهل أشعة التصويب */
+};
+
 export abstract class EnemyBase {
   public readonly config: EnemyConfig;
   public readonly group = new THREE.Group();
@@ -90,6 +98,7 @@ export abstract class EnemyBase {
   public readonly visorMat: THREE.MeshBasicMaterial;
   public shieldMat: THREE.MeshStandardMaterial | null = null;
   public generatorMat: THREE.MeshStandardMaterial | null = null;
+  public contactShadow: THREE.Mesh | null = null;
 
   public leftLeg: THREE.Mesh | null = null;
   public rightLeg: THREE.Mesh | null = null;
@@ -118,12 +127,25 @@ export abstract class EnemyBase {
   public hoverHeight = 0;
   public hasSummoned = false;
 
+  // حقول خاصة بالمشوِّش (Jammer)
+  public empCooldown = 0;
+  public empWarningTimer = 0;
+  public empCoilMat: THREE.MeshStandardMaterial | null = null;
+  public empChargeRing: THREE.Mesh | null = null;
+
+  // حقول خاصة بالشبح (Ghost)
+  public revealTimer = 0;
+
+  // حقول خاصة بأعداء النخبة (Elite Variants)
+  public eliteAffix: EliteAffixId | null = null;
+  public affixLabelSprite: THREE.Sprite | null = null;
+
   // حقول خاصة بالباس
   public bossPhase: 1 | 2 | 3 = 1;
   public bossAttackIdx = 0;
   public slamCharge = 0;
 
-  protected readonly ownDisposables: Array<THREE.BufferGeometry | THREE.Material> = [];
+  protected readonly ownDisposables: Array<THREE.BufferGeometry | THREE.Material | THREE.Texture> = [];
 
   constructor(config: EnemyConfig, wave: number, shared: EnemySharedGeometries, overrideHp?: number) {
     this.config = config;
@@ -148,8 +170,10 @@ export abstract class EnemyBase {
     const hpBgMat = this.track(new THREE.MeshBasicMaterial({ color: 0x0f172a, side: THREE.DoubleSide }));
     this.hpFgMat = this.track(new THREE.MeshBasicMaterial({ color: 0x22c55e, side: THREE.DoubleSide }));
     const hpBg = new THREE.Mesh(shared.hpBgGeo, hpBgMat);
+    hpBg.raycast = noopRaycast;
     this.hpFg = new THREE.Mesh(shared.hpFgGeo, this.hpFgMat);
     this.hpFg.position.z = 0.01;
+    this.hpFg.raycast = noopRaycast;
     this.hpBarGroup.add(hpBg, this.hpFg);
     this.hpBarGroup.visible = false;
     this.group.add(this.hpBarGroup);
@@ -158,6 +182,8 @@ export abstract class EnemyBase {
     if (!config.flying) {
       const contactShadow = new THREE.Mesh(shared.shadowGeo, shared.shadowMat);
       contactShadow.position.y = 0.02;
+      contactShadow.raycast = noopRaycast;
+      this.contactShadow = contactShadow;
       this.group.add(contactShadow);
     }
 
@@ -165,7 +191,7 @@ export abstract class EnemyBase {
     this.group.scale.setScalar(config.scale);
   }
 
-  protected track<T extends THREE.BufferGeometry | THREE.Material>(res: T): T {
+  protected track<T extends THREE.BufferGeometry | THREE.Material | THREE.Texture>(res: T): T {
     this.ownDisposables.push(res);
     return res;
   }
@@ -210,6 +236,118 @@ export abstract class EnemyBase {
   }
 
   protected abstract buildBody(shared: EnemySharedGeometries): void;
+
+  /** تطبيق ترقية النخبة (توهج محيطي + اسم الصفة فوق العدو + تعديل السرعة) */
+  public applyEliteVariant(affix: EliteAffixId): void {
+    this.eliteAffix = affix;
+    const meta = ELITE_AFFIXES[affix];
+
+    if (affix === 'swift') {
+      this.speed *= PLAYER_CONSTANTS.ELITE_SPEED_MULT;
+    }
+
+    // إضافة غلاف متوهج محيط بجميع أجزاء العدو (BackSide Outline) دون اعتراض أشعة التصويب
+    const outlineMat = this.track(
+      new THREE.MeshBasicMaterial({
+        color: meta.colorHex,
+        side: THREE.BackSide,
+        transparent: true,
+        opacity: 0.78,
+        depthWrite: false,
+      }),
+    );
+
+    const bodyMeshes: THREE.Mesh[] = [];
+    this.group.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh && (obj.userData as EnemyHitUserData | undefined)?.enemy === this) {
+        bodyMeshes.push(obj as THREE.Mesh);
+      }
+    });
+
+    for (const mesh of bodyMeshes) {
+      const outline = new THREE.Mesh(mesh.geometry, outlineMat);
+      outline.scale.setScalar(1.1);
+      outline.raycast = noopRaycast;
+      mesh.add(outline);
+    }
+
+    // اسم الصفة بالعربية كبطاقة عائمة فوق العدو
+    const labelSprite = this.createAffixSprite(`★ نخبة · ${meta.name}`, meta.color);
+    if (labelSprite) {
+      labelSprite.position.set(0, this.config.flying ? 1.55 : 3.35, 0);
+      this.affixLabelSprite = labelSprite;
+      this.group.add(labelSprite);
+    }
+  }
+
+  /** إنشاء بطاقة نصية عربية فوق العدو لعرض صفة النخبة */
+  private createAffixSprite(text: string, borderColor: string): THREE.Sprite | null {
+    if (typeof document === 'undefined') return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 96;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(2, 6, 23, 0.86)';
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = 6;
+
+    const pad = 10;
+    const w = canvas.width - pad * 2;
+    const h = canvas.height - pad * 2;
+    const r = 18;
+    ctx.beginPath();
+    ctx.moveTo(pad + r, pad);
+    ctx.lineTo(pad + w - r, pad);
+    ctx.quadraticCurveTo(pad + w, pad, pad + w, pad + r);
+    ctx.lineTo(pad + w, pad + h - r);
+    ctx.quadraticCurveTo(pad + w, pad + h, pad + w - r, pad + h);
+    ctx.lineTo(pad + r, pad + h);
+    ctx.quadraticCurveTo(pad, pad + h, pad, pad + h - r);
+    ctx.lineTo(pad, pad + r);
+    ctx.quadraticCurveTo(pad, pad, pad + r, pad);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.font = '900 34px Cairo, Tajawal, sans-serif';
+    ctx.fillStyle = borderColor;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.direction = 'rtl';
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 2);
+
+    const tex = this.track(new THREE.CanvasTexture(canvas));
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mat = this.track(
+      new THREE.SpriteMaterial({
+        map: tex,
+        transparent: true,
+        depthWrite: false,
+      }),
+    );
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(2.55, 0.48, 1);
+    sprite.raycast = noopRaycast;
+    return sprite;
+  }
+
+  /** كشف الشبح بالكامل لمدة محددة عند إطلاق النار أو تلقي إصابة */
+  public reveal(duration: number = PLAYER_CONSTANTS.GHOST_REVEAL_DURATION): void {
+    this.revealTimer = Math.max(this.revealTimer, duration);
+  }
+
+  /** تحديث شفافية الشبح (يُعاد تعريفها في GhostEnemy) */
+  public updateStealthVisual(_dt: number, _nowMs: number): void {
+    // لا تأثير للأعداء العاديين
+  }
+
+  /** حساب النقاط المستحقة عند قتل العدو (مع مكافأة النخبة +50%) */
+  public getScoreValue(): number {
+    return this.eliteAffix ? Math.round(this.config.score * 1.5) : this.config.score;
+  }
 
   /** الموقع العالمي لفوهة سلاح العدو */
   public getMuzzleWorld(out: THREE.Vector3): THREE.Vector3 {

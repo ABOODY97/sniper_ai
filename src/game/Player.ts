@@ -65,8 +65,9 @@ export class Player {
   public maxGrenades: number = PLAYER_CONSTANTS.GRENADE_MAX;
   public grenadeCooldown = 0;
 
-  // مضاعف السرعة من الترقيات
+  // مضاعف السرعة من الترقيات ومضاعف الجاذبية من معدِّلات الموجات
   public speedMult = 1.0;
+  public gravityMult = 1.0;
 
   // مؤقتات حركة المشي والخطوات واهتزاز الكاميرا
   public bobTimer = 0;
@@ -88,6 +89,7 @@ export class Player {
     this.timeSinceLastHit = 10;
 
     this.speedMult = 1.0;
+    this.gravityMult = 1.0;
     this.dashCooldownBase = 2.5;
     this.dashCooldown = 0;
     this.dashTimer = 0;
@@ -381,7 +383,7 @@ export class Player {
       this.camera.position.z,
       playerFeetY,
     );
-    this.velY -= PLAYER_CONSTANTS.GRAVITY * dt;
+    this.velY -= PLAYER_CONSTANTS.GRAVITY * this.gravityMult * dt;
     playerFeetY += this.velY * dt;
     if (playerFeetY <= groundY) {
       playerFeetY = groundY;

@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  ELITE_AFFIXES,
   PLAYER_CONSTANTS,
+  WAVE_MUTATORS,
   computeBossMaxHp,
   computeBossPhase,
   computeComboMultiplier,
@@ -12,6 +14,8 @@ import {
   getKillStreakReward,
   isBulletHittingPlayerHeight,
   pickEnemyTypeForWave,
+  pickWaveMutator,
+  rollEliteAffix,
 } from './rules';
 
 /* ==========================================
@@ -45,7 +49,7 @@ test('مضاعف الكومبو وحساب نقاط القتل', () => {
   assert.equal(computeKillPoints(260, false, true, 2), (260 + 75) * 2);
 });
 
-test('حساب الضرر للدرع الأمامي والمولد الخلفي والرأس والباس', () => {
+test('حساب الضرر للدرع الأمامي والمولد الخلفي والرأس والباس وصفة النخبة المدرعة ومضاعف الرأس', () => {
   // الدرع الأمامي يمتص 80% من الضرر
   const shieldHit = computeHitDamage({
     enemyType: 'shielded',
@@ -91,9 +95,42 @@ test('حساب الضرر للدرع الأمامي والمولد الخلفي 
   });
   assert.ok(Math.abs(bossWeak.damage - 228) < 0.001);
   assert.equal(bossWeak.isCrit, true);
+
+  // عدو النخبة بصفة "مُدرَّع" يتلقى ضرراً أقل بنسبة 50% من طلقات الجسم فقط
+  const armoredBody = computeHitDamage({
+    enemyType: 'jammer',
+    rawDmg: 80,
+    dmgMult: 1,
+    hitZone: 'body',
+    currentHp: 90,
+    eliteAffix: 'armored',
+  });
+  assert.equal(armoredBody.damage, 40);
+
+  const armoredHead = computeHitDamage({
+    enemyType: 'jammer',
+    rawDmg: 80,
+    dmgMult: 1,
+    hitZone: 'head',
+    currentHp: 90,
+    eliteAffix: 'armored',
+  });
+  assert.equal(armoredHead.damage, 80);
+
+  // معدِّل "إصابات الرأس بضرر مضاعف" يضاعف ضرر الرأس ×2
+  const doubleHs = computeHitDamage({
+    enemyType: 'ghost',
+    rawDmg: 50,
+    dmgMult: 1,
+    hitZone: 'head',
+    currentHp: 60,
+    headshotMult: 2.0,
+  });
+  assert.equal(doubleHs.damage, 100);
+  assert.equal(doubleHs.isCrit, true);
 });
 
-test('مراحل الباس وصحته وعدد أعداء الموجات', () => {
+test('مراحل الباس وصحته وعدد أعداء الموجات وحد الأعداء المتوازن', () => {
   assert.equal(computeBossMaxHp(5), 900);
   assert.equal(computeBossMaxHp(10), 1450);
   assert.equal(computeBossPhase(900, 900), 1);
@@ -103,16 +140,60 @@ test('مراحل الباس وصحته وعدد أعداء الموجات', () =
   assert.equal(computeWaveEnemyCount(1), 8);
   assert.equal(computeWaveEnemyCount(4), 17);
   assert.equal(computeWaveEnemyCount(5), 1);
+  assert.equal(PLAYER_CONSTANTS.MAX_ENEMIES, 14);
 });
 
-test('توزيع الأعداء حسب رقم الموجة ومكافآت سلسلة القتل', () => {
+test('توزيع الأعداء حسب رقم الموجة (بما فيها المشوِّش والشبح) ومكافآت سلسلة القتل', () => {
   assert.equal(pickEnemyTypeForWave(1, 0.2), 'rusher');
   assert.equal(pickEnemyTypeForWave(1, 0.8), 'trooper');
   assert.equal(pickEnemyTypeForWave(2, 0.9), 'drone');
-  assert.equal(pickEnemyTypeForWave(4, 0.8), 'sniper');
+  assert.equal(pickEnemyTypeForWave(3, 0.8), 'ghost');
+  assert.equal(pickEnemyTypeForWave(4, 0.62), 'jammer');
+  assert.equal(pickEnemyTypeForWave(4, 0.74), 'ghost');
+  assert.equal(pickEnemyTypeForWave(4, 0.85), 'sniper');
 
   assert.equal(getKillStreakReward(4), null);
   assert.equal(getKillStreakReward(5)?.effect, 'shield_overcharge');
   assert.equal(getKillStreakReward(10)?.effect, 'tactical_resupply');
   assert.equal(getKillStreakReward(15)?.effect, 'fury_overdrive');
+});
+
+test('توليد أعداء النخبة بدءاً من الموجة 6 بنسبة 15% لغير الباس مع الصفات الأربع', () => {
+  // قبل الموجة 6 لا تظهر النخبة
+  assert.equal(rollEliteAffix(5, false, 0.01, 0.0), null);
+  // الباس لا يتحول لنخبة
+  assert.equal(rollEliteAffix(10, true, 0.01, 0.0), null);
+  // عند نسبة >= 0.15 لا يتحول لنخبة
+  assert.equal(rollEliteAffix(6, false, 0.15, 0.0), null);
+
+  // عند نسبة < 0.15 في الموجة 6+ تُختار إحدى الصفات الأربع
+  const a1 = rollEliteAffix(6, false, 0.14, 0.05);
+  const a2 = rollEliteAffix(6, false, 0.05, 0.3);
+  const a3 = rollEliteAffix(7, false, 0.02, 0.6);
+  const a4 = rollEliteAffix(8, false, 0.0, 0.9);
+
+  assert.equal(a1, 'explosive');
+  assert.equal(a2, 'swift');
+  assert.equal(a3, 'regenerating');
+  assert.equal(a4, 'armored');
+  assert.ok(ELITE_AFFIXES[a1!].name.length > 0);
+  assert.ok(ELITE_AFFIXES[a4!].name.length > 0);
+});
+
+test('معدِّلات الموجات تبدأ من الموجة 3 وتتكرر كل 3 موجات', () => {
+  assert.equal(pickWaveMutator(1, 0.1), null);
+  assert.equal(pickWaveMutator(2, 0.1), null);
+  assert.equal(pickWaveMutator(4, 0.1), null);
+  assert.equal(pickWaveMutator(5, 0.1), null);
+
+  const m1 = pickWaveMutator(3, 0.05);
+  const m2 = pickWaveMutator(6, 0.3);
+  const m3 = pickWaveMutator(9, 0.6);
+  const m4 = pickWaveMutator(12, 0.9);
+
+  assert.equal(m1?.id, 'heavy_fog');
+  assert.equal(m2?.id, 'low_gravity');
+  assert.equal(m3?.id, 'fast_fragile');
+  assert.equal(m4?.id, 'double_headshot');
+  assert.equal(m1?.name, WAVE_MUTATORS.heavy_fog.name);
 });

@@ -4,10 +4,13 @@ import { useGameStore } from '../game/store';
 /* ==========================================
    الرادار التكتيكي الدائري (Canvas 2D مستقل بدون إعادة رسم React)
    يعرض الأعداء بألوانهم وأشكالهم، الزعيم، دوائر الهاون، السطوح، وصناديق الإمداد
+   ويتعطّل مؤقتاً مع تأثير تشويش عند إصابة اللاعب بنبضة EMP من المشوِّش
    ========================================== */
 
 export function Radar() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const empDisabledTimer = useGameStore((s) => s.empDisabledTimer);
+  const isJammed = empDisabledTimer > 0;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -21,9 +24,23 @@ export function Radar() {
     const cy = h / 2;
 
     const draw = () => {
-      const rd = useGameStore.getState().radarData;
-      const scale = rd.scale || 1.65;
+      const state = useGameStore.getState();
       ctx.clearRect(0, 0, w, h);
+
+      // تعطيل الرادار مع خطوط تشويش كهرومغناطيسي أثناء تأثير المشوِّش (EMP)
+      if (state.empDisabledTimer > 0) {
+        ctx.fillStyle = 'rgba(30, 10, 45, 0.92)';
+        ctx.fillRect(0, 0, w, h);
+        for (let y = 0; y < h; y += 6) {
+          ctx.fillStyle =
+            Math.random() > 0.45 ? 'rgba(192, 132, 252, 0.22)' : 'rgba(56, 189, 248, 0.14)';
+          ctx.fillRect(Math.random() * 24, y, w - Math.random() * 48, 2);
+        }
+        return;
+      }
+
+      const rd = state.radarData;
+      const scale = rd.scale || 1.65;
 
       // دوائر المسافة
       ctx.strokeStyle = 'rgba(56, 189, 248, 0.2)';
@@ -120,10 +137,23 @@ export function Radar() {
 
   return (
     <div
-      className="w-[152px] h-[152px] rounded-full bg-slate-950/88 border-2 border-sky-400/70 shadow-[0_0_20px_rgba(56,189,248,0.22)] overflow-hidden"
-      aria-label="الرادار التكتيكي"
+      className={`relative w-[152px] h-[152px] rounded-full bg-slate-950/88 border-2 overflow-hidden ${
+        isJammed
+          ? 'border-fuchsia-400 shadow-[0_0_22px_rgba(192,132,252,0.45)]'
+          : 'border-sky-400/70 shadow-[0_0_20px_rgba(56,189,248,0.22)]'
+      }`}
+      aria-label={isJammed ? 'الرادار معطّل بسبب تشويش EMP' : 'الرادار التكتيكي'}
     >
       <canvas ref={canvasRef} width={156} height={156} className="block w-full h-full" />
+      {isJammed && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/65 text-center px-2">
+          <span className="text-xs font-black text-fuchsia-300">⚡ تشويش EMP</span>
+          <span className="text-[11px] font-bold text-slate-200 mt-0.5">الرادار معطّل</span>
+          <span className="text-xs font-black text-fuchsia-200 hud-nums mt-0.5">
+            {empDisabledTimer.toFixed(1)}ث
+          </span>
+        </div>
+      )}
     </div>
   );
 }

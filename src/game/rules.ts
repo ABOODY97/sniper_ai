@@ -1,4 +1,12 @@
-import type { EnemyTypeId, GameSettings, HitZone, MapId } from './types';
+import type {
+  EliteAffixId,
+  EnemyTypeId,
+  GameSettings,
+  HitZone,
+  MapId,
+  WaveMutatorId,
+  WaveMutatorInfo,
+} from './types';
 
 /* ==========================================
    القواعد والحسابات المنطقية النقية للعبة
@@ -38,6 +46,19 @@ export const PLAYER_CONSTANTS = {
   GRENADE_RADIUS: 7.5,
   GRENADE_COOLDOWN: 1.1,
   GRENADE_MAX: 4,
+  JAMMER_EMP_INTERVAL: 8.0,
+  JAMMER_EMP_WARNING: 1.0,
+  JAMMER_EMP_RADIUS: 18.0,
+  JAMMER_EMP_DISABLE_DURATION: 3.0,
+  GHOST_REVEAL_DURATION: 2.0,
+  ELITE_MIN_WAVE: 6,
+  ELITE_CHANCE: 0.15,
+  ELITE_SPEED_MULT: 1.4,
+  ELITE_REGEN_PER_SEC: 3.0,
+  ELITE_ARMORED_BODY_MULT: 0.5,
+  ELITE_EXPLOSION_RADIUS: 6.5,
+  ELITE_EXPLOSION_DAMAGE: 32,
+  MUTATOR_BANNER_DURATION_MS: 4000,
 } as const;
 
 export const STORAGE_KEYS = {
@@ -52,6 +73,100 @@ export const DEFAULT_SETTINGS: GameSettings = {
   muted: false,
   quality: 'high',
 };
+
+export interface EliteAffixMeta {
+  id: EliteAffixId;
+  name: string;
+  color: string;
+  colorHex: number;
+}
+
+/** بيانات صفات أعداء النخبة (تظهر من الموجة 6 بنسبة 15%) */
+export const ELITE_AFFIXES: Record<EliteAffixId, EliteAffixMeta> = {
+  explosive: {
+    id: 'explosive',
+    name: 'متفجر عند الموت',
+    color: '#f97316',
+    colorHex: 0xf97316,
+  },
+  swift: {
+    id: 'swift',
+    name: 'سريع (+40%)',
+    color: '#38bdf8',
+    colorHex: 0x38bdf8,
+  },
+  regenerating: {
+    id: 'regenerating',
+    name: 'متجدد (+3/ث)',
+    color: '#4ade80',
+    colorHex: 0x4ade80,
+  },
+  armored: {
+    id: 'armored',
+    name: 'مُدرَّع (-50% جسم)',
+    color: '#eab308',
+    colorHex: 0xeab308,
+  },
+};
+
+export const ELITE_AFFIX_LIST: EliteAffixId[] = ['explosive', 'swift', 'regenerating', 'armored'];
+
+/** تحديد ما إذا كان العدو نخبة واختيار صفة عشوائية له (بدءاً من الموجة 6 بنسبة 15% لغير الباس) */
+export function rollEliteAffix(
+  wave: number,
+  isBoss: boolean,
+  chanceRng: number,
+  affixRng: number,
+): EliteAffixId | null {
+  if (isBoss || wave < PLAYER_CONSTANTS.ELITE_MIN_WAVE) return null;
+  if (chanceRng >= PLAYER_CONSTANTS.ELITE_CHANCE) return null;
+  const clamped = Math.max(0, Math.min(0.9999, affixRng));
+  const idx = Math.floor(clamped * ELITE_AFFIX_LIST.length);
+  return ELITE_AFFIX_LIST[idx];
+}
+
+/** بيانات معدِّلات الموجات (تظهر بدءاً من الموجة 3 كل 3 موجات لمدة 4 ثوانٍ على الشاشة) */
+export const WAVE_MUTATORS: Record<WaveMutatorId, WaveMutatorInfo> = {
+  heavy_fog: {
+    id: 'heavy_fog',
+    name: 'ضباب كثيف',
+    description: 'مدى الرؤية محدود بسبب الضباب الكثيف!',
+    color: '#94a3b8',
+  },
+  low_gravity: {
+    id: 'low_gravity',
+    name: 'جاذبية منخفضة',
+    description: 'قفزات عالية وجاذبية مخفّضة في ساحة المعركة!',
+    color: '#38bdf8',
+  },
+  fast_fragile: {
+    id: 'fast_fragile',
+    name: 'أعداء سريعون وهشّون',
+    description: 'الأعداء أسرع بنسبة 45% لكن صحتهم أقل بنسبة 40%!',
+    color: '#f97316',
+  },
+  double_headshot: {
+    id: 'double_headshot',
+    name: 'إصابات الرأس بضرر مضاعف',
+    description: 'جميع إصابات الرأس تُلحق ضعف الضرر (×2)!',
+    color: '#facc15',
+  },
+};
+
+export const WAVE_MUTATOR_LIST: WaveMutatorId[] = [
+  'heavy_fog',
+  'low_gravity',
+  'fast_fragile',
+  'double_headshot',
+];
+
+/** اختيار معدِّل عشوائي للموجة (من الموجة 3 وكل 3 موجات: 3، 6، 9، 12...) */
+export function pickWaveMutator(wave: number, rngValue: number): WaveMutatorInfo | null {
+  if (wave < 3 || wave % 3 !== 0) return null;
+  const clamped = Math.max(0, Math.min(0.9999, rngValue));
+  const id = WAVE_MUTATOR_LIST[Math.floor(clamped * WAVE_MUTATOR_LIST.length)];
+  return WAVE_MUTATORS[id];
+}
 
 /** حساب سرعة التزحلق المتناقصة بسلاسة من 17 إلى 6 خلال 0.85 ثانية */
 export function computeSlideSpeed(remainingTime: number, speedMult = 1.0): number {
@@ -80,7 +195,7 @@ export function computeKillPoints(
   return (baseScore + bonus) * computeComboMultiplier(comboCount);
 }
 
-/** حساب الضرر النهائي حسب نوع العدو ومنطقة الإصابة */
+/** حساب الضرر النهائي حسب نوع العدو ومنطقة الإصابة وصفة النخبة ومعدِّل الموجة */
 export function computeHitDamage(params: {
   enemyType: EnemyTypeId;
   rawDmg: number;
@@ -88,11 +203,25 @@ export function computeHitDamage(params: {
   hitZone: HitZone;
   currentHp: number;
   instantHeadshotKill?: boolean;
+  eliteAffix?: EliteAffixId | null;
+  headshotMult?: number;
 }): { damage: number; isCrit: boolean; isShieldBlock: boolean } {
-  const { enemyType, rawDmg, dmgMult, hitZone, currentHp, instantHeadshotKill } = params;
+  const {
+    enemyType,
+    rawDmg,
+    dmgMult,
+    hitZone,
+    currentHp,
+    instantHeadshotKill,
+    eliteAffix,
+    headshotMult = 1.0,
+  } = params;
 
   if (enemyType === 'boss') {
-    if (hitZone === 'head' || hitZone === 'generator') {
+    if (hitZone === 'head') {
+      return { damage: rawDmg * 2.0 * dmgMult * headshotMult, isCrit: true, isShieldBlock: false };
+    }
+    if (hitZone === 'generator') {
       return { damage: rawDmg * 2.0 * dmgMult, isCrit: true, isShieldBlock: false };
     }
     return { damage: rawDmg * dmgMult, isCrit: false, isShieldBlock: false };
@@ -107,13 +236,15 @@ export function computeHitDamage(params: {
   }
 
   if (hitZone === 'head') {
+    const hsDmg = rawDmg * dmgMult * headshotMult;
     if (instantHeadshotKill) {
-      return { damage: Math.max(currentHp, rawDmg * dmgMult), isCrit: true, isShieldBlock: false };
+      return { damage: Math.max(currentHp, hsDmg), isCrit: true, isShieldBlock: false };
     }
-    return { damage: rawDmg * dmgMult, isCrit: true, isShieldBlock: false };
+    return { damage: hsDmg, isCrit: true, isShieldBlock: false };
   }
 
-  return { damage: rawDmg * dmgMult, isCrit: false, isShieldBlock: false };
+  const bodyMult = eliteAffix === 'armored' ? PLAYER_CONSTANTS.ELITE_ARMORED_BODY_MULT : 1.0;
+  return { damage: rawDmg * dmgMult * bodyMult, isCrit: false, isShieldBlock: false };
 }
 
 /** تحديد مرحلة الباس (1 أو 2 أو 3) بناءً على نسبة الصحة المتبقية */
@@ -137,7 +268,7 @@ export function computeWaveEnemyCount(wave: number): number {
   return 5 + wave * 3;
 }
 
-/** اختيار نوع عدو مناسب لرقم الموجة وفق توزيع متوازن */
+/** اختيار نوع عدو مناسب لرقم الموجة وفق توزيع متوازن يشمل المشوِّش والشبح */
 export function pickEnemyTypeForWave(wave: number, rngValue: number): Exclude<EnemyTypeId, 'boss'> {
   const r = Math.max(0, Math.min(0.9999, rngValue));
   if (wave === 1) {
@@ -149,19 +280,22 @@ export function pickEnemyTypeForWave(wave: number, rngValue: number): Exclude<En
     return 'drone';
   }
   if (wave === 3) {
-    if (r < 0.22) return 'rusher';
-    if (r < 0.46) return 'trooper';
-    if (r < 0.62) return 'drone';
-    if (r < 0.76) return 'shielded';
-    if (r < 0.90) return 'mortar';
+    if (r < 0.18) return 'rusher';
+    if (r < 0.38) return 'trooper';
+    if (r < 0.52) return 'drone';
+    if (r < 0.64) return 'shielded';
+    if (r < 0.76) return 'mortar';
+    if (r < 0.88) return 'ghost';
     return 'heavy';
   }
-  if (r < 0.15) return 'rusher';
-  if (r < 0.31) return 'trooper';
-  if (r < 0.45) return 'drone';
-  if (r < 0.59) return 'shielded';
-  if (r < 0.73) return 'mortar';
-  if (r < 0.88) return 'sniper';
+  if (r < 0.12) return 'rusher';
+  if (r < 0.25) return 'trooper';
+  if (r < 0.36) return 'drone';
+  if (r < 0.47) return 'shielded';
+  if (r < 0.58) return 'mortar';
+  if (r < 0.69) return 'jammer';
+  if (r < 0.79) return 'ghost';
+  if (r < 0.90) return 'sniper';
   return 'heavy';
 }
 

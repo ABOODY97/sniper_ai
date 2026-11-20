@@ -14,16 +14,19 @@ import { SniperEnemy } from './SniperEnemy';
 import { DroneEnemy } from './DroneEnemy';
 import { ShieldedEnemy } from './ShieldedEnemy';
 import { MortarEnemy } from './MortarEnemy';
+import { JammerEnemy } from './JammerEnemy';
+import { GhostEnemy } from './GhostEnemy';
 import { BossEnemy } from '../boss/Boss';
 import { updateBossBehavior } from '../boss/BossAttacks';
 import type { MapManager } from '../maps/MapManager';
 import type { ObjectPools } from '../pools/ObjectPools';
 import type { AudioManager } from '../audio/AudioManager';
-import { PLAYER_CONSTANTS, isBulletHittingPlayerHeight } from '../rules';
+import { PLAYER_CONSTANTS, isBulletHittingPlayerHeight, rollEliteAffix } from '../rules';
 
 /* ==========================================
    مدير الأعداء — يدير توليد الأعداء والزعماء بحد أقصى 14 عدواً،
-   والقذائف المقوسة (الهاون)، وموجات الصدمة، وليزر القناص المعادي
+   والقذائف المقوسة (الهاون)، وموجات الصدمة، ونبضات EMP للمشوِّش،
+   وتخفي الشبح، وأعداء النخبة (بدءاً من الموجة 6)، وليزر القناص المعادي
    ========================================== */
 
 export interface MortarShell {
@@ -48,11 +51,24 @@ export interface ShockwaveRing {
   hitPlayer: boolean;
 }
 
+export interface EmpPulseRing {
+  mesh: THREE.Mesh;
+  radius: number;
+  maxRadius: number;
+  speed: number;
+}
+
+export interface EnemySpawnModifiers {
+  hpMult?: number;
+  speedMult?: number;
+}
+
 export interface EnemyUpdateCallbacks {
   damagePlayer: (amount: number, knockUp?: number) => void;
   addCameraShake: (amount: number) => void;
-  notifyFeed: (text: string, isHeadshot?: boolean) => void;
+  notifyFeed: (text: string, isHeadshot?: boolean, isHighlight?: boolean) => void;
   onMinionsSummoned: (count: number) => void;
+  onEmpHitPlayer: (durationSec: number) => void;
 }
 
 const _muzzle = new THREE.Vector3();
@@ -75,6 +91,7 @@ export class EnemyManager {
   public readonly enemies: EnemyBase[] = [];
   public readonly mortarShells: MortarShell[] = [];
   public readonly shockwaves: ShockwaveRing[] = [];
+  public readonly empRings: EmpPulseRing[] = [];
   public activeBoss: BossEnemy | null = null;
 
   constructor(
@@ -91,12 +108,13 @@ export class EnemyManager {
     this.mortarShellGeo = new THREE.SphereGeometry(0.28, 10, 10);
   }
 
-  /** توليد عدو من النوع المحدد في موقع آمن بعيداً عن اللاعب */
+  /** توليد عدو من النوع المحدد في موقع آمن بعيداً عن اللاعب مع دعم النخبة ومعدِّلات الموجة */
   public spawn(
     type: EnemyTypeId,
     wave: number,
     playerPos: THREE.Vector3,
     customPos?: { x: number; z: number },
+    modifiers?: EnemySpawnModifiers,
   ): EnemyBase | null {
     if (type !== 'boss' && this.enemies.length >= PLAYER_CONSTANTS.MAX_ENEMIES) {
       return null;
@@ -125,10 +143,31 @@ export class EnemyManager {
       case 'mortar':
         enemy = new MortarEnemy(wave, this.sharedGeos);
         break;
+      case 'jammer':
+        enemy = new JammerEnemy(wave, this.sharedGeos);
+        break;
+      case 'ghost':
+        enemy = new GhostEnemy(wave, this.sharedGeos);
+        break;
       case 'boss':
         enemy = new BossEnemy(wave, this.sharedGeos);
         this.activeBoss = enemy as BossEnemy;
         break;
+    }
+
+    // تطبيق معدِّلات الموجة (مثل: أعداء سريعون وهشّون)
+    if (modifiers?.hpMult && modifiers.hpMult !== 1) {
+      enemy.maxHp = Math.max(15, Math.round(enemy.maxHp * modifiers.hpMult));
+      enemy.hp = enemy.maxHp;
+    }
+    if (modifiers?.speedMult && modifiers.speedMult !== 1) {
+      enemy.speed *= modifiers.speedMult;
+    }
+
+    // من الموجة 6، لكل عدو غير الباس فرصة 15% للتحول إلى عدو نخبة بصفة عشوائية
+    const rolledAffix = rollEliteAffix(wave, !!enemy.config.isBoss, Math.random(), Math.random());
+    if (rolledAffix) {
+      enemy.applyEliteVariant(rolledAffix);
     }
 
     let ex = 0;
@@ -267,12 +306,44 @@ export class EnemyManager {
     });
   }
 
+  /** توليد حلقة نبضة EMP مرئية ومتوسعة من المشوِّش حتى مدى 18 وحدة */
+  private spawnEmpPulse(origin: THREE.Vector3): void {
+    this.audio.play('empBlast');
+    _tmpPos.set(origin.x, 1.8, origin.z);
+    this.pools.spawnExplosion(_tmpPos, 0xc084fc, 18, 11);
+
+    const ringMesh = new THREE.Mesh(
+      new THREE.TorusGeometry(1.0, 0.12, 10, 40),
+      new THREE.MeshBasicMaterial({
+        color: 0xc084fc,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+      }),
+    );
+    ringMesh.rotation.x = Math.PI / 2;
+    ringMesh.position.set(origin.x, 1.15, origin.z);
+    this.scene.add(ringMesh);
+
+    this.empRings.push({
+      mesh: ringMesh,
+      radius: 1.0,
+      maxRadius: PLAYER_CONSTANTS.JAMMER_EMP_RADIUS,
+      speed: 36,
+    });
+  }
+
   private fireEnemyWeapon(
     enemy: EnemyBase,
     playerPos: THREE.Vector3,
     playerEyeHeight: number,
     cb: EnemyUpdateCallbacks,
   ): void {
+    // كشف الشبح بالكامل لمدة ثانيتين بمجرد إطلاق النار
+    if (enemy.config.type === 'ghost') {
+      enemy.reveal(PLAYER_CONSTANTS.GHOST_REVEAL_DURATION);
+    }
+
     enemy.getMuzzleWorld(_muzzle);
 
     if (enemy.config.type === 'sniper') {
@@ -333,7 +404,7 @@ export class EnemyManager {
     this.pools.spawnEnemyBullet(_muzzle, _shotDir, enemy.config.dmg, enemy.config.visor, 1.0, 4.5);
   }
 
-  /** تحديث جميع الأعداء والزعيم والقذائف وموجات الصدمة كل إطار */
+  /** تحديث جميع الأعداء والزعيم والقذائف وموجات الصدمة ونبضات EMP كل إطار */
   public update(
     dt: number,
     nowMs: number,
@@ -341,6 +412,7 @@ export class EnemyManager {
     playerPos: THREE.Vector3,
     playerEyeHeight: number,
     cb: EnemyUpdateCallbacks,
+    spawnModifiers?: EnemySpawnModifiers,
   ): void {
     const playerFeetY = playerPos.y - playerEyeHeight;
 
@@ -351,7 +423,13 @@ export class EnemyManager {
       if (e.flashTimer > 0) {
         e.flashTimer -= dt;
         if (e.flashTimer <= 0) {
-          e.bodyMat.emissive.setHex(e.config.isBoss && e.bossPhase === 3 ? 0x450a0a : 0x000000);
+          const baseEmissive =
+            e.config.isBoss && e.bossPhase === 3
+              ? 0x450a0a
+              : e.config.type === 'ghost'
+                ? 0x0e7490
+                : 0x000000;
+          e.bodyMat.emissive.setHex(baseEmissive);
         }
       }
       if (e.shieldFlashTimer > 0) {
@@ -362,6 +440,19 @@ export class EnemyManager {
       }
       if (e.generatorMat) {
         e.generatorMat.emissiveIntensity = 1.0 + Math.sin(nowMs * 0.008) * 0.45;
+      }
+
+      // تجدد الصحة لأعداء النخبة ذوي صفة "متجدد" (3 نقطة صحة / ثانية)
+      if (e.eliteAffix === 'regenerating' && e.hp > 0 && e.hp < e.maxHp) {
+        e.hp = Math.min(e.maxHp, e.hp + PLAYER_CONSTANTS.ELITE_REGEN_PER_SEC * dt);
+        if (e.hpBarGroup.visible) {
+          e.refreshHpBar();
+        }
+      }
+
+      // تحديث الشفافية والكشف للشبح
+      if (e.config.type === 'ghost') {
+        e.updateStealthVisual(dt, nowMs);
       }
 
       // 1. سلوك الزعيم
@@ -378,7 +469,7 @@ export class EnemyManager {
               const sx = b.group.position.x + Math.cos(ang) * 5.0;
               const sz = b.group.position.z + Math.sin(ang) * 5.0;
               const pick = Math.random() > 0.5 ? 'rusher' : 'trooper';
-              if (this.spawn(pick, wave, playerPos, { x: sx, z: sz })) {
+              if (this.spawn(pick, wave, playerPos, { x: sx, z: sz }, spawnModifiers)) {
                 spawned++;
               }
             }
@@ -406,7 +497,7 @@ export class EnemyManager {
               const ang = Math.random() * Math.PI * 2;
               const sx = e.group.position.x + Math.cos(ang) * 3.5;
               const sz = e.group.position.z + Math.sin(ang) * 3.5;
-              if (this.spawn('rusher', wave, playerPos, { x: sx, z: sz })) {
+              if (this.spawn('rusher', wave, playerPos, { x: sx, z: sz }, spawnModifiers)) {
                 summoned++;
               }
             }
@@ -428,6 +519,49 @@ export class EnemyManager {
 
       // 3. سلوك الأعداء الأرضيين
       const { dist, dirX, dirZ } = updateGroundEnemyMovement(e, playerPos, this.mapManager, dt);
+
+      // دورة نبضة الـ EMP لعدو المشوِّش (كل 8 ثوانٍ مع صوت تحذير وحلقة شحن قبل ثانية)
+      if (e.config.type === 'jammer') {
+        if (e.empWarningTimer > 0) {
+          e.empWarningTimer -= dt;
+          const prog = 1 - Math.max(0, e.empWarningTimer) / PLAYER_CONSTANTS.JAMMER_EMP_WARNING;
+          if (e.empCoilMat) {
+            e.empCoilMat.emissiveIntensity = 1.6 + Math.sin(nowMs * 0.04) * 1.1;
+          }
+          if (e.empChargeRing) {
+            e.empChargeRing.visible = true;
+            e.empChargeRing.scale.setScalar(1 + prog * 2.4);
+          }
+          if (e.empWarningTimer <= 0) {
+            if (e.empChargeRing) {
+              e.empChargeRing.visible = false;
+              e.empChargeRing.scale.setScalar(1);
+            }
+            if (e.empCoilMat) {
+              e.empCoilMat.emissiveIntensity = 0.9;
+            }
+            this.spawnEmpPulse(e.group.position);
+            const horizDist = Math.hypot(
+              playerPos.x - e.group.position.x,
+              playerPos.z - e.group.position.z,
+            );
+            if (horizDist <= PLAYER_CONSTANTS.JAMMER_EMP_RADIUS) {
+              cb.onEmpHitPlayer(PLAYER_CONSTANTS.JAMMER_EMP_DISABLE_DURATION);
+              cb.addCameraShake(0.055);
+            }
+            e.empCooldown = PLAYER_CONSTANTS.JAMMER_EMP_INTERVAL;
+          }
+        } else {
+          if (e.empCoilMat) {
+            e.empCoilMat.emissiveIntensity = 0.8 + Math.sin(nowMs * 0.006) * 0.3;
+          }
+          e.empCooldown -= dt;
+          if (e.empCooldown <= 0) {
+            e.empWarningTimer = PLAYER_CONSTANTS.JAMMER_EMP_WARNING;
+            this.audio.play('empWarn');
+          }
+        }
+      }
 
       if (e.config.type === 'sniper') {
         e.getMuzzleWorld(_muzzle);
@@ -489,6 +623,24 @@ export class EnemyManager {
             e.shootTimer = e.config.fireRate + Math.random() * 0.6;
           }
         }
+      }
+    }
+
+    // تحديث حلقات نبضة الـ EMP المتوسعة للمشوِّش
+    for (let i = this.empRings.length - 1; i >= 0; i--) {
+      const ring = this.empRings[i];
+      ring.radius += ring.speed * dt;
+      ring.mesh.scale.set(ring.radius, ring.radius, 1);
+      (ring.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(
+        0,
+        (1 - ring.radius / ring.maxRadius) * 0.95,
+      );
+
+      if (ring.radius >= ring.maxRadius) {
+        this.scene.remove(ring.mesh);
+        ring.mesh.geometry.dispose();
+        (ring.mesh.material as THREE.Material).dispose();
+        this.empRings.splice(i, 1);
       }
     }
 
@@ -559,7 +711,7 @@ export class EnemyManager {
     });
   }
 
-  /** جمع نقاط الأعداء وقذائف الهاون لعرضها على الرادار */
+  /** جمع نقاط الأعداء وقذائف الهاون لعرضها على الرادار (باستثناء الشبح المخفي عن الرادار) */
   public collectRadarEntities(out: RadarEntity[]): void {
     for (const m of this.mortarShells) {
       out.push({
@@ -571,6 +723,8 @@ export class EnemyManager {
       });
     }
     for (const e of this.enemies) {
+      // الشبح لا يظهر على الرادار
+      if (e.config.hiddenFromRadar) continue;
       out.push({
         x: e.group.position.x,
         z: e.group.position.z,
@@ -587,7 +741,7 @@ export class EnemyManager {
     }
   }
 
-  /** تنظيف كل الأعداء والقذائف وموجات الصدمة عند إعادة البدء */
+  /** تنظيف كل الأعداء والقذائف وموجات الصدمة وحلقات الـ EMP عند إعادة البدء */
   public clearAll(): void {
     for (const e of [...this.enemies]) {
       e.dispose(this.scene);
@@ -606,6 +760,13 @@ export class EnemyManager {
       (sw.mesh.material as THREE.Material).dispose();
     }
     this.shockwaves.length = 0;
+
+    for (const ring of this.empRings) {
+      this.scene.remove(ring.mesh);
+      ring.mesh.geometry.dispose();
+      (ring.mesh.material as THREE.Material).dispose();
+    }
+    this.empRings.length = 0;
   }
 
   public dispose(): void {

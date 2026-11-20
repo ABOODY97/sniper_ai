@@ -53,6 +53,9 @@ export function HUD() {
   const bannerText = useGameStore((s) => s.bannerText);
   const bannerColor = useGameStore((s) => s.bannerColor);
   const bannerVisible = useGameStore((s) => s.bannerVisible);
+  const empDisabledTimer = useGameStore((s) => s.empDisabledTimer);
+  const activeMutator = useGameStore((s) => s.activeMutator);
+  const mutatorBannerVisible = useGameStore((s) => s.mutatorBannerVisible);
   const killFeed = useGameStore((s) => s.killFeed);
 
   const muted = useGameStore((s) => s.settings.muted);
@@ -94,6 +97,16 @@ export function HUD() {
           boxShadow: 'inset 0 0 130px rgba(56, 189, 248, 0.65)',
           backgroundColor: 'rgba(56, 189, 248, 0.06)',
           opacity: slowMoActive ? 1 : 0,
+        }}
+      />
+
+      {/* تأثير تشويش EMP على حواف الشاشة عند إصابة اللاعب بنبضة المشوِّش */}
+      <div
+        className="fixed inset-0 pointer-events-none transition-opacity duration-150"
+        style={{
+          boxShadow: 'inset 0 0 110px rgba(192, 132, 252, 0.7)',
+          backgroundColor: 'rgba(88, 28, 135, 0.08)',
+          opacity: empDisabledTimer > 0 ? 1 : 0,
         }}
       />
 
@@ -175,6 +188,14 @@ export function HUD() {
                   <span className="text-lg font-black text-emerald-400 hud-nums">{killStreak}</span>
                 </div>
               )}
+              {activeMutator && (
+                <div className="border-r border-slate-700/80 pr-4">
+                  <span className="block text-[11px] text-slate-400 font-bold">معدِّل الموجة</span>
+                  <span className="text-xs sm:text-sm font-black" style={{ color: activeMutator.color }}>
+                    🌀 {activeMutator.name}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -241,7 +262,7 @@ export function HUD() {
 
       {/* إعلان الموجة / مكافآت سلسلة القتل */}
       <div
-        className="fixed top-[20%] left-1/2 -translate-x-1/2 text-2xl sm:text-4xl font-black text-center whitespace-nowrap transition-opacity duration-300 hud-text-stroke"
+        className="fixed top-[18%] left-1/2 -translate-x-1/2 text-2xl sm:text-4xl font-black text-center whitespace-nowrap transition-opacity duration-300 hud-text-stroke"
         style={{
           color: bannerColor,
           opacity: bannerVisible ? 1 : 0,
@@ -249,6 +270,31 @@ export function HUD() {
       >
         {bannerText}
       </div>
+
+      {/* إعلان معدِّل الموجة بالعربية لمدة 4 ثوانٍ (من الموجة 3 وكل 3 موجات) */}
+      {activeMutator && mutatorBannerVisible && (
+        <div
+          className="fixed top-[27%] left-1/2 -translate-x-1/2 rounded-xl bg-slate-950/92 border-2 px-6 py-3 text-center shadow-2xl max-w-[90vw]"
+          style={{ borderColor: activeMutator.color }}
+        >
+          <div className="text-xs font-extrabold text-slate-300 mb-0.5">🌀 معدِّل الموجة النشط</div>
+          <div className="text-xl sm:text-2xl font-black" style={{ color: activeMutator.color }}>
+            {activeMutator.name}
+          </div>
+          <div className="text-xs sm:text-sm font-bold text-slate-200 mt-1">
+            {activeMutator.description}
+          </div>
+        </div>
+      )}
+
+      {/* تنبيه تعطيل المنظار والرادار أثناء نبضة الـ EMP */}
+      {empDisabledTimer > 0 && (
+        <div className="fixed bottom-28 left-1/2 -translate-x-1/2 rounded-lg bg-slate-950/92 border border-fuchsia-400 px-4 py-1.5 text-center shadow-lg">
+          <span className="text-xs sm:text-sm font-black text-fuchsia-300">
+            ⚡ تشويش EMP — المنظار والرادار معطّلان ({empDisabledTimer.toFixed(1)}ث)
+          </span>
+        </div>
+      )}
 
       {/* مؤشر التصويب المركزي الديناميكي */}
       {!showScope && (

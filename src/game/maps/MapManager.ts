@@ -248,6 +248,17 @@ export class MapManager {
     return cfg;
   }
 
+  /** تعديل كثافة الضباب مؤقتاً لمعدِّل الموجة (ضباب كثيف) وإعادتها للوضع الطبيعي */
+  public setFogMultiplier(multiplier: number, minHeavyDensity = 0): void {
+    if (this.scene.fog instanceof THREE.FogExp2) {
+      const targetDensity =
+        multiplier > 1
+          ? Math.max(this.activeMap.fogDensity * multiplier, minHeavyDensity)
+          : this.activeMap.fogDensity;
+      this.scene.fog.density = targetDensity;
+    }
+  }
+
   /** معالم معمارية مركبة للمختبر (أقواس وأبراج طاقة مرئية من نقطة البداية) */
   private buildLabLandmarks(darkMat: THREE.Material, glowMat: THREE.Material): void {
     const beamGeo = this.track(new THREE.BoxGeometry(28, 0.9, 1.2));
