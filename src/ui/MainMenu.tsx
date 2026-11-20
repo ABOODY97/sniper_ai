@@ -1,4 +1,5 @@
 import { useGameStore } from '../game/store';
+import { formatRunTimer } from '../game/rules';
 import { MapSelect } from './MapSelect';
 
 /* ==========================================
@@ -8,13 +9,19 @@ import { MapSelect } from './MapSelect';
 
 export function MainMenu() {
   const screen = useGameStore((s) => s.screen);
+  const selectedMode = useGameStore((s) => s.selectedMode);
+  const setSelectedMode = useGameStore((s) => s.setSelectedMode);
   const selectedMap = useGameStore((s) => s.selectedMap);
   const bestScore = useGameStore((s) => s.bestScore);
   const bestWave = useGameStore((s) => s.bestWave);
+  const bossRushBestBosses = useGameStore((s) => s.bossRushBestBosses);
+  const bossRushBestTimeSec = useGameStore((s) => s.bossRushBestTimeSec);
   const engineActions = useGameStore((s) => s.engineActions);
   const setSettingsOpen = useGameStore((s) => s.setSettingsOpen);
 
   if (screen !== 'title') return null;
+
+  const isBossRush = selectedMode === 'boss_rush';
 
   return (
     <div className="fixed inset-0 z-20 pointer-events-none flex flex-col justify-between p-5 sm:p-8">
@@ -31,10 +38,10 @@ export function MainMenu() {
       <div className="flex-1 flex items-center justify-start">
         <div
           data-ui-interactive="true"
-          className="pointer-events-auto w-full max-w-[540px] flex flex-col gap-4 bg-slate-950/90 border border-sky-500/35 rounded-xl p-5 shadow-[0_20px_50px_rgba(0,0,0,0.65)]"
+          className="pointer-events-auto w-full max-w-[540px] flex flex-col gap-3.5 bg-slate-950/90 border border-sky-500/35 rounded-xl p-5 shadow-[0_20px_50px_rgba(0,0,0,0.65)]"
         >
           {/* شعار SVG مخصص متكامل مع هوية اللعبة */}
-          <div className="flex items-center gap-3.5 border-b border-slate-800 pb-4">
+          <div className="flex items-center gap-3.5 border-b border-slate-800 pb-3.5">
             <svg
               viewBox="0 0 64 64"
               className="w-14 h-14 shrink-0"
@@ -64,17 +71,76 @@ export function MainMenu() {
             </div>
           </div>
 
-          {/* السجلات المحفوظة في localStorage */}
-          <div className="grid grid-cols-2 gap-2.5">
-            <div className="rounded-lg bg-slate-900/95 border border-slate-800 px-3.5 py-2.5">
-              <div className="text-[11px] font-bold text-slate-400">أعلى نتيجة</div>
-              <div className="text-xl font-black text-amber-400 hud-nums">{bestScore}</div>
-            </div>
-            <div className="rounded-lg bg-slate-900/95 border border-slate-800 px-3.5 py-2.5">
-              <div className="text-[11px] font-bold text-slate-400">أعلى موجة</div>
-              <div className="text-xl font-black text-sky-400 hud-nums">{bestWave}</div>
+          {/* اختيار وضع اللعب: الوضع العادي مقابل تحدي الزعماء (Boss Rush) */}
+          <div className="flex flex-col gap-1.5">
+            <div className="text-xs font-bold text-slate-300">اختر وضع اللعب</div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                data-mode="normal"
+                onClick={() => setSelectedMode('normal')}
+                className={`text-right rounded-lg p-2.5 border transition-colors cursor-pointer ${
+                  !isBossRush
+                    ? 'bg-sky-950/90 border-sky-400 shadow-[0_0_16px_rgba(56,189,248,0.22)]'
+                    : 'bg-slate-900/90 border-slate-800 hover:border-slate-600'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-sm font-black text-slate-50">الوضع العادي</span>
+                  <span className="text-[10px] font-extrabold text-sky-300">موجات</span>
+                </div>
+                <p className="mt-0.5 text-[11px] leading-snug text-slate-400">
+                  بقاء متصاعد وزعيم كل 5 موجات لفتح الأسلحة
+                </p>
+              </button>
+
+              <button
+                type="button"
+                data-mode="boss_rush"
+                onClick={() => setSelectedMode('boss_rush')}
+                className={`text-right rounded-lg p-2.5 border transition-colors cursor-pointer ${
+                  isBossRush
+                    ? 'bg-red-950/85 border-red-400 shadow-[0_0_18px_rgba(239,68,68,0.28)]'
+                    : 'bg-slate-900/90 border-slate-800 hover:border-slate-600'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-sm font-black text-slate-50">تحدي الزعماء</span>
+                  <span className="text-[10px] font-extrabold text-amber-300">Boss Rush</span>
+                </div>
+                <p className="mt-0.5 text-[11px] leading-snug text-slate-400">
+                  كل الأسلحة مفتوحة · زعماء متتالون · استراحة 12ث وترقية
+                </p>
+              </button>
             </div>
           </div>
+
+          {/* السجلات المحفوظة في localStorage (منفصلة لكل وضع) */}
+          {isBossRush ? (
+            <div className="grid grid-cols-2 gap-2.5">
+              <div className="rounded-lg bg-slate-900/95 border border-red-500/30 px-3.5 py-2">
+                <div className="text-[11px] font-bold text-slate-400">أكثر زعماء مهزومين</div>
+                <div className="text-xl font-black text-red-400 hud-nums">{bossRushBestBosses}</div>
+              </div>
+              <div className="rounded-lg bg-slate-900/95 border border-amber-500/30 px-3.5 py-2">
+                <div className="text-[11px] font-bold text-slate-400">أسرع زمن لأفضل إنجاز</div>
+                <div className="text-xl font-black text-amber-400 hud-nums" dir="ltr">
+                  {bossRushBestTimeSec !== null ? formatRunTimer(bossRushBestTimeSec) : '--:--'}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2.5">
+              <div className="rounded-lg bg-slate-900/95 border border-slate-800 px-3.5 py-2">
+                <div className="text-[11px] font-bold text-slate-400">أعلى نتيجة</div>
+                <div className="text-xl font-black text-amber-400 hud-nums">{bestScore}</div>
+              </div>
+              <div className="rounded-lg bg-slate-900/95 border border-slate-800 px-3.5 py-2">
+                <div className="text-[11px] font-bold text-slate-400">أعلى موجة</div>
+                <div className="text-xl font-black text-sky-400 hud-nums">{bestWave}</div>
+              </div>
+            </div>
+          )}
 
           {/* اختيار الخريطة */}
           <MapSelect />
@@ -84,10 +150,14 @@ export function MainMenu() {
             <button
               type="button"
               data-start="true"
-              onClick={() => engineActions?.startMission(selectedMap)}
-              className="flex-1 py-3 px-5 rounded-lg bg-sky-500 hover:bg-sky-400 active:bg-sky-600 text-slate-950 font-black text-lg transition-colors cursor-pointer shadow-[0_0_24px_rgba(56,189,248,0.35)]"
+              onClick={() => engineActions?.startMission(selectedMap, selectedMode)}
+              className={`flex-1 py-3 px-5 rounded-lg font-black text-lg transition-colors cursor-pointer ${
+                isBossRush
+                  ? 'bg-red-500 hover:bg-red-400 active:bg-red-600 text-slate-950 shadow-[0_0_24px_rgba(239,68,68,0.4)]'
+                  : 'bg-sky-500 hover:bg-sky-400 active:bg-sky-600 text-slate-950 shadow-[0_0_24px_rgba(56,189,248,0.35)]'
+              }`}
             >
-              ابدأ المهمة
+              {isBossRush ? 'ابدأ تحدي الزعماء' : 'ابدأ المهمة'}
             </button>
             <button
               type="button"

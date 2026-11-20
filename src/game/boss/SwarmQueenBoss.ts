@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { EnemySharedGeometries } from '../enemies/EnemyBase';
-import { BossEnemy } from './Boss';
+import { BossEnemy, type BossSpawnScaleOptions } from './Boss';
 
 /* ==========================================
    الزعيم 2: ملكة السرب الطائرة (Swarm Queen)
@@ -9,19 +9,25 @@ import { BossEnemy } from './Boss';
    ========================================== */
 
 export class SwarmQueenBoss extends BossEnemy {
-  constructor(wave: number, shared: EnemySharedGeometries) {
-    super('swarm_queen', wave, shared, {
-      flying: true,
-      speed: 7.4,
-      color: 0x701a75,
-      visor: 0xf472b6,
-      radarColor: '#ec4899',
-      scale: 2.35,
-      fireRate: 2.35,
-      dmg: 15,
-      score: 1350,
-      phase3ColorHex: 0xbe185d,
-    });
+  constructor(wave: number, shared: EnemySharedGeometries, scaleOpts?: BossSpawnScaleOptions) {
+    super(
+      'swarm_queen',
+      wave,
+      shared,
+      {
+        flying: true,
+        speed: 7.4,
+        color: 0x701a75,
+        visor: 0xf472b6,
+        radarColor: '#ec4899',
+        scale: 2.35,
+        fireRate: 2.35,
+        dmg: 15,
+        score: 1350,
+        phase3ColorHex: 0xbe185d,
+      },
+      scaleOpts,
+    );
     this.hoverHeight = 9.2;
   }
 

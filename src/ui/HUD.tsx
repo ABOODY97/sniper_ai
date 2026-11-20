@@ -1,5 +1,5 @@
 import { useGameStore } from '../game/store';
-import { computeComboMultiplier } from '../game/rules';
+import { computeComboMultiplier, formatRunTimer } from '../game/rules';
 import { Radar } from './Radar';
 import { BossBar } from './BossBar';
 
@@ -11,10 +11,15 @@ import { BossBar } from './BossBar';
 
 export function HUD() {
   const screen = useGameStore((s) => s.screen);
+  const activeMode = useGameStore((s) => s.activeMode);
   const activeMapName = useGameStore((s) => s.activeMapName);
   const wave = useGameStore((s) => s.wave);
   const enemiesLeft = useGameStore((s) => s.enemiesLeft);
   const score = useGameStore((s) => s.score);
+  const bossRushNumber = useGameStore((s) => s.bossRushNumber);
+  const bossRushDefeated = useGameStore((s) => s.bossRushDefeated);
+  const bossRushRunTimeSec = useGameStore((s) => s.bossRushRunTimeSec);
+  const bossRushBreakTimer = useGameStore((s) => s.bossRushBreakTimer);
 
   const health = useGameStore((s) => s.health);
   const maxHealth = useGameStore((s) => s.maxHealth);
@@ -263,35 +268,70 @@ export function HUD() {
       {/* أعلى المنتصف: شريط صحة الزعيم */}
       <BossBar />
 
-      {/* أعلى اليمين: إحصائيات الموجة والنقاط + أزرار الصوت والإيقاف المؤقت */}
+      {/* أعلى اليمين: إحصائيات الموجة (أو تحدي الزعماء) والنقاط + أزرار الصوت والإيقاف المؤقت */}
       <div className="fixed top-4 right-4 flex flex-col items-end gap-2">
         <div className="flex items-center gap-2">
-          <div className="rounded-lg bg-slate-950/88 border border-sky-500/35 px-4 py-2 shadow-lg">
-            <div className="flex items-center gap-4 sm:gap-5">
-              <div>
-                <span className="block text-[11px] text-slate-400 font-bold">الخريطة</span>
-                <span className="text-sm sm:text-base font-extrabold text-sky-300">{activeMapName}</span>
-              </div>
-              <div>
-                <span className="block text-[11px] text-slate-400 font-bold">الموجة</span>
-                <span className="text-lg font-black text-sky-400 hud-nums">{wave}</span>
-              </div>
-              <div>
-                <span className="block text-[11px] text-slate-400 font-bold">الأعداء</span>
-                <span className="text-lg font-black text-red-400 hud-nums">{enemiesLeft}</span>
-              </div>
-              <div>
-                <span className="block text-[11px] text-slate-400 font-bold">النقاط</span>
-                <span className="text-lg font-black text-amber-400 hud-nums">{score}</span>
-              </div>
-              {killStreak > 0 && (
+          {activeMode === 'boss_rush' ? (
+            <div className="rounded-lg bg-slate-950/88 border border-red-500/45 px-4 py-2 shadow-lg">
+              <div className="flex items-center gap-4 sm:gap-5">
                 <div>
-                  <span className="block text-[11px] text-slate-400 font-bold">سلسلة القتل</span>
-                  <span className="text-lg font-black text-emerald-400 hud-nums">{killStreak}</span>
+                  <span className="block text-[11px] text-red-300 font-bold">تحدي الزعماء</span>
+                  <span className="text-sm sm:text-base font-extrabold text-sky-300">
+                    {activeMapName}
+                  </span>
                 </div>
-              )}
+                <div>
+                  <span className="block text-[11px] text-slate-400 font-bold">الزعيم الحالي</span>
+                  <span className="text-lg font-black text-red-400 hud-nums" dir="ltr">
+                    #{bossRushNumber}
+                  </span>
+                </div>
+                <div>
+                  <span className="block text-[11px] text-slate-400 font-bold">المهزومون</span>
+                  <span className="text-lg font-black text-emerald-400 hud-nums">
+                    {bossRushDefeated}
+                  </span>
+                </div>
+                <div>
+                  <span className="block text-[11px] text-slate-400 font-bold">الزمن الكلي</span>
+                  <span className="text-lg font-black text-amber-400 hud-nums" dir="ltr">
+                    {formatRunTimer(bossRushRunTimeSec)}
+                  </span>
+                </div>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="rounded-lg bg-slate-950/88 border border-sky-500/35 px-4 py-2 shadow-lg">
+              <div className="flex items-center gap-4 sm:gap-5">
+                <div>
+                  <span className="block text-[11px] text-slate-400 font-bold">الخريطة</span>
+                  <span className="text-sm sm:text-base font-extrabold text-sky-300">
+                    {activeMapName}
+                  </span>
+                </div>
+                <div>
+                  <span className="block text-[11px] text-slate-400 font-bold">الموجة</span>
+                  <span className="text-lg font-black text-sky-400 hud-nums">{wave}</span>
+                </div>
+                <div>
+                  <span className="block text-[11px] text-slate-400 font-bold">الأعداء</span>
+                  <span className="text-lg font-black text-red-400 hud-nums">{enemiesLeft}</span>
+                </div>
+                <div>
+                  <span className="block text-[11px] text-slate-400 font-bold">النقاط</span>
+                  <span className="text-lg font-black text-amber-400 hud-nums">{score}</span>
+                </div>
+                {killStreak > 0 && (
+                  <div>
+                    <span className="block text-[11px] text-slate-400 font-bold">سلسلة القتل</span>
+                    <span className="text-lg font-black text-emerald-400 hud-nums">
+                      {killStreak}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* أزرار الخدمات السريعة (كتم الصوت + إيقاف مؤقت) */}
           <div data-ui-interactive="true" className="pointer-events-auto flex items-center gap-1.5">
@@ -399,6 +439,18 @@ export function HUD() {
           </div>
           <div className="text-xs sm:text-sm font-bold text-slate-200 mt-1">
             {activeMutator.description}
+          </div>
+        </div>
+      )}
+
+      {/* عدّاد استراحة الـ 12 ثانية بين الزعماء في وضع تحدي الزعماء */}
+      {activeMode === 'boss_rush' && bossRushBreakTimer > 0 && (
+        <div className="fixed top-[26%] left-1/2 -translate-x-1/2 rounded-xl bg-slate-950/92 border border-emerald-400/75 px-5 py-2.5 text-center shadow-2xl">
+          <div className="text-xs font-extrabold text-emerald-300">
+            ⏱️ استراحة ما بين الزعماء — استعد للمواجهة
+          </div>
+          <div className="text-xl sm:text-2xl font-black text-slate-50 mt-0.5 hud-nums">
+            الزعيم #{bossRushNumber + 1} خلال {Math.ceil(bossRushBreakTimer)} ثانية
           </div>
         </div>
       )}

@@ -6,11 +6,15 @@ import { useGameStore } from '../game/store';
 
 export function UpgradePicker() {
   const screen = useGameStore((s) => s.screen);
+  const activeMode = useGameStore((s) => s.activeMode);
   const waveCleared = useGameStore((s) => s.upgradeWaveCleared);
+  const bossRushBreakTimer = useGameStore((s) => s.bossRushBreakTimer);
   const options = useGameStore((s) => s.upgradeOptions);
   const engineActions = useGameStore((s) => s.engineActions);
 
   if (screen !== 'upgrade') return null;
+
+  const isBossRush = activeMode === 'boss_rush';
 
   return (
     <div
@@ -20,10 +24,25 @@ export function UpgradePicker() {
       aria-label="اختيار الترقية"
     >
       <div data-ui-interactive="true" className="w-full max-w-3xl text-center">
-        <h2 className="text-3xl sm:text-4xl font-black text-sky-400">اختر ترقيتك التكتيكية</h2>
+        <h2
+          className={`text-3xl sm:text-4xl font-black ${
+            isBossRush ? 'text-amber-400' : 'text-sky-400'
+          }`}
+        >
+          {isBossRush ? 'استراحة تحدي الزعماء — اختر ترقية' : 'اختر ترقيتك التكتيكية'}
+        </h2>
         <p className="mt-2 text-sm sm:text-base text-slate-300 font-bold">
-          تم تطهير الموجة {waveCleared}! اختر ترقية واحدة قبل انطلاق الموجة {waveCleared + 1}
+          {isBossRush
+            ? `تم إسقاط الزعيم #${waveCleared}! استعادة 50% صحة + إعادة تعبئة كاملة للذخيرة والوقود والحرارة.`
+            : `تم تطهير الموجة ${waveCleared}! اختر ترقية واحدة قبل انطلاق الموجة ${waveCleared + 1}`}
         </p>
+
+        {isBossRush && (
+          <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-slate-900 border border-emerald-400/60 px-4 py-1.5 text-sm font-black text-emerald-300 hud-nums">
+            <span>⏱️ الزعيم #{waveCleared + 1} يبدأ خلال</span>
+            <span className="text-amber-300 text-base">{Math.ceil(bossRushBreakTimer)}ث</span>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6">
           {options.map((upg) => (

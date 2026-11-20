@@ -7,7 +7,8 @@ import type { AudioManager } from '../audio/AudioManager';
 import { PLAYER_CONSTANTS } from '../rules';
 
 /* ==========================================
-   هجمات وحركة الزعماء الثلاثة عبر 3 مراحل:
+   هجمات وحركة الزعماء الأربعة عبر 3 مراحل:
+   - تيتان أوميغا (الأساسي): صواريخ كتف موجهة، موجات صدمة، وابل بلازما، واستدعاء تعزيزات
    - المهندس المدرّع: أبراج قتالية قابلة للتدمير، درع درونات، صواريخ، وبلازما
    - ملكة السرب الطائرة: تحليق عالٍ، استدعاء أسراب درونات وانتحاريين، قصف جوي، ووابل إبر طاقة
    - العملاق الجبار: ضربات أرضية بموجات صدمة (مزدوجة في المرحلة 3)، مدفعية ثقيلة، ووابل مزدوج
@@ -69,6 +70,77 @@ function fireSpreadVolley(
   }
 }
 
+/** حساب الضرر الفعلي للزعيم مع معامل ضرر الدورة (×1.15 لكل دورة في تحدي الزعماء، و×1 في الوضع العادي) */
+function scaleBossDmg(boss: BossEnemy, baseDmg: number): number {
+  return Math.max(1, Math.round(baseDmg * boss.damageScale));
+}
+
+/** تنفيذ الهجوم التالي للزعيم الأساسي تيتان أوميغا */
+function executeTitanAttack(
+  boss: BossEnemy,
+  playerPos: THREE.Vector3,
+  pools: ObjectPools,
+  audio: AudioManager,
+  cb: BossAttackCallbacks,
+): void {
+  const phase = boss.bossPhase;
+  const cycle = ['missiles', 'barrage', 'shockwave', 'reinforce'] as const;
+  let atk = cycle[boss.bossAttackIdx % cycle.length];
+  boss.bossAttackIdx++;
+
+  if (atk === 'reinforce' && cb.activeEnemyCount() >= PLAYER_CONSTANTS.MAX_ENEMIES - 1) {
+    atk = 'barrage';
+  }
+
+  if (atk === 'missiles') {
+    audio.play('mortarLaunch');
+    const missileCount = phase === 1 ? 2 : phase === 2 ? 3 : 4;
+    cb.notifyFeed('🚀 صواريخ تيتان أوميغا الموجهة — ابتعد عن دوائر التحذير!', false, true);
+    for (let i = 0; i < missileCount; i++) {
+      const spread = i === 0 ? 0 : 7.5;
+      const tx = playerPos.x + (Math.random() - 0.5) * spread * 2;
+      const tz = playerPos.z + (Math.random() - 0.5) * spread * 2;
+      cb.launchGroundMissile(_origin, tx, tz, 4.2, 1.45, scaleBossDmg(boss, 28));
+    }
+  } else if (atk === 'shockwave') {
+    boss.slamCharge = 0.72;
+    boss.slamQueued = 0;
+    audio.play('sniperWarn');
+    cb.notifyFeed('⬆️ تيتان أوميغا يحضّر موجة صدمة أرضية — اقفز لتفاديها!', true, true);
+  } else if (atk === 'reinforce') {
+    const count = phase >= 2 ? 3 : 2;
+    const spawned = cb.summonBossUnit(boss, 'trooper', count, { radius: 6.0 });
+    if (spawned > 0) {
+      audio.play('bossRoar');
+      cb.notifyFeed(`⚠️ تيتان أوميغا استدعى ${spawned} من حرسه المسلح!`, false, true);
+    } else {
+      fireSpreadVolley(
+        _origin,
+        playerPos,
+        5 + phase * 2,
+        0.54,
+        27 + phase * 2,
+        scaleBossDmg(boss, 14),
+        0xf97316,
+        pools,
+        audio,
+      );
+    }
+  } else {
+    fireSpreadVolley(
+      _origin,
+      playerPos,
+      5 + phase * 2,
+      0.55,
+      27 + phase * 3,
+      scaleBossDmg(boss, 14),
+      0xf97316,
+      pools,
+      audio,
+    );
+  }
+}
+
 /** تنفيذ الهجوم التالي للمهندس المدرّع */
 function executeEngineerAttack(
   boss: BossEnemy,
@@ -96,7 +168,17 @@ function executeEngineerAttack(
       audio.play('droneAlert');
       cb.notifyFeed(`🔧 المهندس نشر ${spawned} برج قتالي — دمّر الأبراج بسرعة!`, true, true);
     } else {
-      fireSpreadVolley(_origin, playerPos, 5 + phase, 0.48, 26 + phase * 2, 13, 0x38bdf8, pools, audio);
+      fireSpreadVolley(
+        _origin,
+        playerPos,
+        5 + phase,
+        0.48,
+        26 + phase * 2,
+        scaleBossDmg(boss, 13),
+        0x38bdf8,
+        pools,
+        audio,
+      );
     }
   } else if (atk === 'drone_shield') {
     const count = phase === 3 ? 3 : 2;
@@ -107,7 +189,7 @@ function executeEngineerAttack(
       audio.play('empWarn');
       cb.notifyFeed('🛡️ المهندس فعّل درع الدرونات — دمّر الدرونات الحامية لكسر الحماية!', true, true);
     } else {
-      fireSpreadVolley(_origin, playerPos, 6, 0.52, 27, 13, 0x38bdf8, pools, audio);
+      fireSpreadVolley(_origin, playerPos, 6, 0.52, 27, scaleBossDmg(boss, 13), 0x38bdf8, pools, audio);
     }
   } else if (atk === 'missiles') {
     audio.play('mortarLaunch');
@@ -117,10 +199,20 @@ function executeEngineerAttack(
       const spread = i === 0 ? 0 : 7.0;
       const tx = playerPos.x + (Math.random() - 0.5) * spread * 2;
       const tz = playerPos.z + (Math.random() - 0.5) * spread * 2;
-      cb.launchGroundMissile(_origin, tx, tz, 4.0, 1.45, 26);
+      cb.launchGroundMissile(_origin, tx, tz, 4.0, 1.45, scaleBossDmg(boss, 26));
     }
   } else {
-    fireSpreadVolley(_origin, playerPos, 4 + phase * 2, 0.5, 26 + phase * 3, 13, 0x38bdf8, pools, audio);
+    fireSpreadVolley(
+      _origin,
+      playerPos,
+      4 + phase * 2,
+      0.5,
+      26 + phase * 3,
+      scaleBossDmg(boss, 13),
+      0x38bdf8,
+      pools,
+      audio,
+    );
   }
 }
 
@@ -148,7 +240,7 @@ function executeSwarmQueenAttack(
       audio.play('droneAlert');
       cb.notifyFeed(`🐝 ملكة السرب أطلقت ${spawned} من درونات السرب!`, true, true);
     } else {
-      fireSpreadVolley(_origin, playerPos, 7, 0.56, 28, 12, 0xf472b6, pools, audio);
+      fireSpreadVolley(_origin, playerPos, 7, 0.56, 28, scaleBossDmg(boss, 12), 0xf472b6, pools, audio);
     }
   } else if (atk === 'kamikaze') {
     const count = phase >= 2 ? 2 : 1;
@@ -157,7 +249,7 @@ function executeSwarmQueenAttack(
       audio.play('sniperWarn');
       cb.notifyFeed(`💣 ملكة السرب أطلقت ${spawned} درون انتحاري — أسقطها قبل الانقضاض!`, true, true);
     } else {
-      fireSpreadVolley(_origin, playerPos, 7, 0.56, 28, 12, 0xf472b6, pools, audio);
+      fireSpreadVolley(_origin, playerPos, 7, 0.56, 28, scaleBossDmg(boss, 12), 0xf472b6, pools, audio);
     }
   } else if (atk === 'carpet_bomb') {
     audio.play('mortarLaunch');
@@ -167,10 +259,20 @@ function executeSwarmQueenAttack(
       const spread = i === 0 ? 0.5 : 8.5;
       const tx = playerPos.x + (Math.random() - 0.5) * spread * 2;
       const tz = playerPos.z + (Math.random() - 0.5) * spread * 2;
-      cb.launchGroundMissile(_origin, tx, tz, 4.3, 1.35, 28);
+      cb.launchGroundMissile(_origin, tx, tz, 4.3, 1.35, scaleBossDmg(boss, 28));
     }
   } else {
-    fireSpreadVolley(_origin, playerPos, 5 + phase * 2, 0.62, 27 + phase * 2, 12, 0xf472b6, pools, audio);
+    fireSpreadVolley(
+      _origin,
+      playerPos,
+      5 + phase * 2,
+      0.62,
+      27 + phase * 2,
+      scaleBossDmg(boss, 12),
+      0xf472b6,
+      pools,
+      audio,
+    );
   }
 }
 
@@ -210,7 +312,7 @@ function executeColossusAttack(
       const spread = i === 0 ? 0 : 8.0;
       const tx = playerPos.x + (Math.random() - 0.5) * spread * 2;
       const tz = playerPos.z + (Math.random() - 0.5) * spread * 2;
-      cb.launchGroundMissile(_origin, tx, tz, 4.6, 1.5, 32);
+      cb.launchGroundMissile(_origin, tx, tz, 4.6, 1.5, scaleBossDmg(boss, 32));
     }
   } else if (atk === 'reinforce') {
     const count = phase >= 2 ? 3 : 2;
@@ -219,10 +321,20 @@ function executeColossusAttack(
       audio.play('bossRoar');
       cb.notifyFeed(`⚠️ العملاق الجبار استدعى ${spawned} مقتحمين لمحاصرتك!`, false, true);
     } else {
-      fireSpreadVolley(_origin, playerPos, 7, 0.58, 27, 15, 0xfde047, pools, audio);
+      fireSpreadVolley(_origin, playerPos, 7, 0.58, 27, scaleBossDmg(boss, 15), 0xfde047, pools, audio);
     }
   } else {
-    fireSpreadVolley(_origin, playerPos, 5 + phase * 2, 0.58, 26 + phase * 3, 15, 0xfde047, pools, audio);
+    fireSpreadVolley(
+      _origin,
+      playerPos,
+      5 + phase * 2,
+      0.58,
+      26 + phase * 3,
+      scaleBossDmg(boss, 15),
+      0xfde047,
+      pools,
+      audio,
+    );
   }
 }
 
@@ -306,7 +418,10 @@ export function updateBossBehavior(
     boss.group.position.y = Math.sin((1 - Math.max(0, boss.slamCharge) / 0.72) * Math.PI) * 3.1;
     if (boss.slamCharge <= 0) {
       boss.group.position.y = 0;
-      cb.spawnShockwave(boss.group.position, boss.archetype === 'colossus' ? 32 : 26);
+      cb.spawnShockwave(
+        boss.group.position,
+        scaleBossDmg(boss, boss.archetype === 'colossus' ? 32 : 26),
+      );
       if (boss.slamQueued > 0) {
         boss.slamQueued--;
         boss.slamCharge = 0.62;
@@ -315,8 +430,8 @@ export function updateBossBehavior(
     }
   } else {
     _moveVec.set(0, 0, 0);
-    const preferredMax = boss.archetype === 'engineer' ? 24 : 18;
-    const preferredMin = boss.archetype === 'engineer' ? 14 : 9;
+    const preferredMax = boss.archetype === 'engineer' ? 24 : boss.archetype === 'titan' ? 21 : 18;
+    const preferredMin = boss.archetype === 'engineer' ? 14 : boss.archetype === 'titan' ? 11 : 9;
     if (dist > preferredMax) _moveVec.add(_dir);
     else if (dist < preferredMin) _moveVec.sub(_dir);
 
@@ -326,7 +441,10 @@ export function updateBossBehavior(
       boss.strafeTimer = 2.0 + Math.random() * 1.5;
     }
     _perp.set(-_dir.z * boss.strafeDir, 0, _dir.x * boss.strafeDir);
-    _moveVec.addScaledVector(_perp, boss.archetype === 'engineer' ? 0.85 : 0.55);
+    _moveVec.addScaledVector(
+      _perp,
+      boss.archetype === 'engineer' ? 0.85 : boss.archetype === 'titan' ? 0.72 : 0.55,
+    );
 
     if (_moveVec.lengthSq() > 0.01) {
       _moveVec.normalize();
@@ -344,7 +462,9 @@ export function updateBossBehavior(
     boss.shootTimer -= dt;
     if (boss.shootTimer <= 0) {
       boss.getMuzzleWorld(_origin);
-      if (boss.archetype === 'engineer') {
+      if (boss.archetype === 'titan') {
+        executeTitanAttack(boss, playerPos, pools, audio, cb);
+      } else if (boss.archetype === 'engineer') {
         executeEngineerAttack(boss, playerPos, pools, audio, cb);
       } else {
         executeColossusAttack(boss, playerPos, pools, audio, cb);
@@ -358,7 +478,7 @@ export function updateBossBehavior(
 
   // ضرر التصادم القريب مع الزعيم الأرضي
   if (dist < 3.6 && playerFeetY < 4.5) {
-    cb.damagePlayer(boss.archetype === 'colossus' ? 26 : 20);
+    cb.damagePlayer(scaleBossDmg(boss, boss.archetype === 'colossus' ? 26 : 20));
     boss.group.position.addScaledVector(_dir, -1.8);
   }
 }

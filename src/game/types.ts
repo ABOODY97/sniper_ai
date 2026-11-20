@@ -6,6 +6,8 @@ import * as THREE from 'three';
 
 export type GameScreenState = 'title' | 'playing' | 'paused' | 'upgrade' | 'gameover';
 
+export type GameMode = 'normal' | 'boss_rush';
+
 export type MapId = 'lab' | 'city' | 'desert' | 'mountain' | 'port' | 'station';
 
 export type QualityLevel = 'high' | 'low';
@@ -27,7 +29,7 @@ export type EnemyTypeId =
   | 'turret'
   | 'boss';
 
-export type BossArchetypeId = 'engineer' | 'swarm_queen' | 'colossus';
+export type BossArchetypeId = 'titan' | 'engineer' | 'swarm_queen' | 'colossus';
 
 export type EliteAffixId = 'explosive' | 'swift' | 'regenerating' | 'armored';
 
@@ -277,7 +279,13 @@ export interface GameSettings {
   realisticBallistics: boolean;
 }
 
+export interface BossRushRecords {
+  bestBosses: number;
+  bestTimeSec: number | null;
+}
+
 export interface EndRunSummary {
+  mode: GameMode;
   score: number;
   bestScore: number;
   wave: number;
@@ -285,5 +293,8 @@ export interface EndRunSummary {
   headshots: number;
   kills: number;
   bossKills: number;
+  runTimeSec?: number;
+  bossRushBestBosses?: number;
+  bossRushBestTimeSec?: number | null;
   isNewRecord: boolean;
 }

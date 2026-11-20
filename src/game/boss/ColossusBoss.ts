@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { EnemySharedGeometries } from '../enemies/EnemyBase';
-import { BossEnemy } from './Boss';
+import { BossEnemy, type BossSpawnScaleOptions } from './Boss';
 
 /* ==========================================
    الزعيم 3: العملاق الجبار (The Colossus)
@@ -9,18 +9,24 @@ import { BossEnemy } from './Boss';
    ========================================== */
 
 export class ColossusBoss extends BossEnemy {
-  constructor(wave: number, shared: EnemySharedGeometries) {
-    super('colossus', wave, shared, {
-      speed: 2.9,
-      color: 0x3f3f46,
-      visor: 0xef4444,
-      radarColor: '#ef4444',
-      scale: 2.75,
-      fireRate: 2.7,
-      dmg: 22,
-      score: 1500,
-      phase3ColorHex: 0x7f1d1d,
-    });
+  constructor(wave: number, shared: EnemySharedGeometries, scaleOpts?: BossSpawnScaleOptions) {
+    super(
+      'colossus',
+      wave,
+      shared,
+      {
+        speed: 2.9,
+        color: 0x3f3f46,
+        visor: 0xef4444,
+        radarColor: '#ef4444',
+        scale: 2.75,
+        fireRate: 2.7,
+        dmg: 22,
+        score: 1500,
+        phase3ColorHex: 0x7f1d1d,
+      },
+      scaleOpts,
+    );
   }
 
   protected buildBody(_shared: EnemySharedGeometries): void {

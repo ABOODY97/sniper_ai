@@ -30,7 +30,8 @@ import { SwarmDroneEnemy } from './SwarmDroneEnemy';
 import { KamikazeDroneEnemy } from './KamikazeDroneEnemy';
 import { FlyingSniperEnemy } from './FlyingSniperEnemy';
 import { TurretEnemy } from './TurretEnemy';
-import type { BossEnemy } from '../boss/Boss';
+import type { BossEnemy, BossSpawnScaleOptions } from '../boss/Boss';
+import { TitanBoss } from '../boss/TitanBoss';
 import { EngineerBoss } from '../boss/EngineerBoss';
 import { SwarmQueenBoss } from '../boss/SwarmQueenBoss';
 import { ColossusBoss } from '../boss/ColossusBoss';
@@ -88,6 +89,7 @@ export interface EnemySpawnModifiers {
 
 export interface EnemySpawnOptions {
   bossArchetype?: BossArchetypeId;
+  bossScale?: BossSpawnScaleOptions;
   protectsBoss?: boolean;
   isBossSummon?: boolean;
   allowSwarmOverflow?: boolean;
@@ -141,16 +143,22 @@ export class EnemyManager {
     this.mortarShellGeo = new THREE.SphereGeometry(0.28, 10, 10);
   }
 
-  /** إنشاء مثيل الزعيم المناسب حسب نوعه (المهندس / ملكة السرب / العملاق الجبار) */
-  private createBossInstance(wave: number, archetypeOverride?: BossArchetypeId): BossEnemy {
+  /** إنشاء مثيل الزعيم المناسب حسب نوعه (تيتان أوميغا / المهندس / ملكة السرب / العملاق الجبار) */
+  private createBossInstance(
+    wave: number,
+    archetypeOverride?: BossArchetypeId,
+    scaleOpts?: BossSpawnScaleOptions,
+  ): BossEnemy {
     const archetype = archetypeOverride ?? pickBossArchetypeForWave(wave);
     switch (archetype) {
+      case 'titan':
+        return new TitanBoss(wave, this.sharedGeos, scaleOpts);
       case 'engineer':
-        return new EngineerBoss(wave, this.sharedGeos);
+        return new EngineerBoss(wave, this.sharedGeos, scaleOpts);
       case 'swarm_queen':
-        return new SwarmQueenBoss(wave, this.sharedGeos);
+        return new SwarmQueenBoss(wave, this.sharedGeos, scaleOpts);
       case 'colossus':
-        return new ColossusBoss(wave, this.sharedGeos);
+        return new ColossusBoss(wave, this.sharedGeos, scaleOpts);
     }
   }
 
@@ -250,7 +258,7 @@ export class EnemyManager {
         enemy = new TurretEnemy(wave, this.sharedGeos);
         break;
       case 'boss': {
-        const boss = this.createBossInstance(wave, options?.bossArchetype);
+        const boss = this.createBossInstance(wave, options?.bossArchetype, options?.bossScale);
         this.activeBoss = boss;
         enemy = boss;
         break;

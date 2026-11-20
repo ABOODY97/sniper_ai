@@ -3,6 +3,7 @@ import type {
   AdsStyle,
   BossHudState,
   EndRunSummary,
+  GameMode,
   GameScreenState,
   GameSettings,
   KillFeedItem,
@@ -13,7 +14,7 @@ import type {
   WeaponResourceMode,
   WeaponSlotUI,
 } from './types';
-import { loadRecords, loadSettings, saveSettings } from './rules';
+import { loadBossRushRecords, loadRecords, loadSettings, saveSettings } from './rules';
 
 /* ==========================================
    مخزن الحالة المشترك بين محرك اللعبة وواجهة React
@@ -21,7 +22,7 @@ import { loadRecords, loadSettings, saveSettings } from './rules';
    ========================================== */
 
 export interface EngineBridgeActions {
-  startMission: (mapId?: MapId) => void;
+  startMission: (mapId?: MapId, mode?: GameMode) => void;
   resumeMission: () => void;
   pauseMission: () => void;
   restartMission: () => void;
@@ -32,17 +33,21 @@ export interface EngineBridgeActions {
 }
 
 export interface GameStoreState {
-  // حالة الشاشة
+  // حالة الشاشة ووضع اللعب
   screen: GameScreenState;
   settingsOpen: boolean;
+  selectedMode: GameMode;
+  activeMode: GameMode;
   selectedMap: MapId;
   activeMap: MapId;
   activeMapName: string;
   hasActiveSession: boolean;
 
-  // السجلات المحفوظة
+  // السجلات المحفوظة (الوضع العادي وتحدي الزعماء بشكل منفصل)
   bestScore: number;
   bestWave: number;
+  bossRushBestBosses: number;
+  bossRushBestTimeSec: number | null;
 
   // الإعدادات
   settings: GameSettings;
@@ -53,6 +58,10 @@ export interface GameStoreState {
   enemiesLeft: number;
   headshots: number;
   kills: number;
+  bossRushNumber: number;
+  bossRushDefeated: number;
+  bossRushRunTimeSec: number;
+  bossRushBreakTimer: number;
 
   health: number;
   maxHealth: number;
@@ -133,6 +142,7 @@ export interface GameStoreState {
   setEngineActions: (actions: EngineBridgeActions | null) => void;
   setScreen: (screen: GameScreenState) => void;
   setSettingsOpen: (open: boolean) => void;
+  setSelectedMode: (mode: GameMode) => void;
   setSelectedMap: (mapId: MapId) => void;
   updateSettings: (partial: Partial<GameSettings>) => void;
   pushKillFeed: (text: string, isHeadshot?: boolean, isHighlight?: boolean) => void;
@@ -141,12 +151,15 @@ export interface GameStoreState {
 }
 
 const initialRecords = loadRecords();
+const initialBossRushRecords = loadBossRushRecords();
 const initialSettings = loadSettings();
 let killFeedSeq = 1;
 
 export const useGameStore = create<GameStoreState>((set, get) => ({
   screen: 'title',
   settingsOpen: false,
+  selectedMode: 'normal',
+  activeMode: 'normal',
   selectedMap: 'lab',
   activeMap: 'lab',
   activeMapName: 'المختبر',
@@ -154,6 +167,8 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
 
   bestScore: initialRecords.bestScore,
   bestWave: initialRecords.bestWave,
+  bossRushBestBosses: initialBossRushRecords.bestBosses,
+  bossRushBestTimeSec: initialBossRushRecords.bestTimeSec,
   settings: initialSettings,
 
   score: 0,
@@ -161,6 +176,10 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   enemiesLeft: 0,
   headshots: 0,
   kills: 0,
+  bossRushNumber: 1,
+  bossRushDefeated: 0,
+  bossRushRunTimeSec: 0,
+  bossRushBreakTimer: 0,
 
   health: 100,
   maxHealth: 100,
@@ -265,6 +284,8 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   },
 
   setSettingsOpen: (open) => set({ settingsOpen: open }),
+
+  setSelectedMode: (mode) => set({ selectedMode: mode }),
 
   setSelectedMap: (mapId) => {
     set({ selectedMap: mapId });

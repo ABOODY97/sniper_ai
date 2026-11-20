@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { EnemySharedGeometries } from '../enemies/EnemyBase';
-import { BossEnemy } from './Boss';
+import { BossEnemy, type BossSpawnScaleOptions } from './Boss';
 
 /* ==========================================
    الزعيم 1: المهندس المدرّع (The Engineer)
@@ -9,18 +9,24 @@ import { BossEnemy } from './Boss';
    ========================================== */
 
 export class EngineerBoss extends BossEnemy {
-  constructor(wave: number, shared: EnemySharedGeometries) {
-    super('engineer', wave, shared, {
-      speed: 4.1,
-      color: 0xb45309,
-      visor: 0x38bdf8,
-      radarColor: '#f59e0b',
-      scale: 2.15,
-      fireRate: 2.5,
-      dmg: 16,
-      score: 1200,
-      phase3ColorHex: 0xd97706,
-    });
+  constructor(wave: number, shared: EnemySharedGeometries, scaleOpts?: BossSpawnScaleOptions) {
+    super(
+      'engineer',
+      wave,
+      shared,
+      {
+        speed: 4.1,
+        color: 0xb45309,
+        visor: 0x38bdf8,
+        radarColor: '#f59e0b',
+        scale: 2.15,
+        fireRate: 2.5,
+        dmg: 16,
+        score: 1200,
+        phase3ColorHex: 0xd97706,
+      },
+      scaleOpts,
+    );
   }
 
   protected buildBody(_shared: EnemySharedGeometries): void {

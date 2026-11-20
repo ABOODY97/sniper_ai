@@ -9,11 +9,18 @@ import { computeBossMaxHp, computeBossPhase, getBossArchetypeMeta } from '../rul
    وتدير المراحل الثلاث (1-3)، وتدرّج الصحة، وبيانات شريط الباس
    ========================================== */
 
+export interface BossSpawnScaleOptions {
+  overrideMaxHp?: number;
+  overrideTier?: number;
+  damageScale?: number;
+}
+
 export abstract class BossEnemy extends EnemyBase {
   public readonly tier: number;
   public readonly archetype: BossArchetypeId;
   public readonly subtitle: string;
   public readonly bannerColor: string;
+  public readonly damageScale: number;
   protected readonly phase3ColorHex: number;
 
   constructor(
@@ -21,9 +28,10 @@ export abstract class BossEnemy extends EnemyBase {
     wave: number,
     shared: EnemySharedGeometries,
     overrides: Partial<EnemyConfig> & { phase3ColorHex?: number } = {},
+    scaleOpts?: BossSpawnScaleOptions,
   ) {
     const meta = getBossArchetypeMeta(archetype);
-    const maxHp = computeBossMaxHp(wave, archetype);
+    const maxHp = scaleOpts?.overrideMaxHp ?? computeBossMaxHp(wave, archetype);
     const { phase3ColorHex, ...cfgOverrides } = overrides;
 
     super(
@@ -48,10 +56,11 @@ export abstract class BossEnemy extends EnemyBase {
       maxHp,
     );
 
-    this.tier = Math.max(1, Math.floor(wave / 5));
+    this.tier = scaleOpts?.overrideTier ?? Math.max(1, Math.floor(wave / 5));
     this.archetype = archetype;
     this.subtitle = meta.subtitle;
     this.bannerColor = meta.bannerColor;
+    this.damageScale = scaleOpts?.damageScale ?? 1.0;
     this.phase3ColorHex = phase3ColorHex ?? 0xb91c1c;
   }
 

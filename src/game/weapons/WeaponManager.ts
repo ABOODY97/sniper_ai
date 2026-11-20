@@ -206,6 +206,36 @@ export class WeaponManager {
     return this.current.getResourceHudState();
   }
 
+  /** فتح جميع الأسلحة التسعة من البداية وتعبئتها بالكامل (مخصص لوضع تحدي الزعماء) */
+  public unlockAllWeapons(): void {
+    for (const w of this.weapons) {
+      w.unlocked = true;
+    }
+    this.refillAllResourcesFull();
+  }
+
+  /** إعادة تعبئة كاملة للذخيرة والمخازن ووقود قاذف اللهب وتصفير حرارة الميني غان (بين الزعماء في تحدي الزعماء) */
+  public refillAllResourcesFull(): void {
+    this.isReloading = false;
+    this.reloadTimer = 0;
+    this.customHint = '';
+    for (const w of this.weapons) {
+      if (!w.unlocked) continue;
+      w.mag = w.magSize;
+      w.reserve = w.maxReserve;
+      if (w instanceof Minigun) {
+        w.heat = 0;
+        w.overheated = false;
+        w.overheatTimer = 0;
+        w.coolDelay = 0;
+        w.spinProgress = 0;
+      } else if (w instanceof Flamethrower) {
+        w.fuel = w.magSize;
+        w.regenDelay = 0;
+      }
+    }
+  }
+
   /** إضافة ذخيرة لكل الأسلحة المفتوحة */
   public refillAmmoAll(magsCount = 2): void {
     for (const w of this.weapons) {

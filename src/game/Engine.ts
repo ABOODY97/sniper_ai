@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type {
   BossArchetypeId,
+  GameMode,
   GameSettings,
   HitZone,
   MapId,
@@ -13,6 +14,8 @@ import { useGameStore } from './store';
 import {
   ELITE_AFFIXES,
   PLAYER_CONSTANTS,
+  computeBossRushMaxHp,
+  computeBossRushScaling,
   computeComboMultiplier,
   computeEffectiveGravity,
   computeHitDamage,
@@ -20,8 +23,10 @@ import {
   computeWaveEnemyCount,
   getKillStreakReward,
   isPointInFlameCone,
+  pickBossRushArchetype,
   pickEnemyTypeForWave,
   pickWaveMutator,
+  saveBossRushRecords,
   saveRecords,
   stepBallisticProjectile,
 } from './rules';
@@ -145,7 +150,8 @@ export class GameEngine {
   private isADS = false;
   private pointerWasLocked = false;
 
-  // حالة الجلسة والموجات
+  // حالة الجلسة والموجات ووضع اللعب
+  private activeMode: GameMode = 'normal';
   private isPlaying = false;
   private isGameOver = false;
   private hasActiveSession = false;
@@ -154,6 +160,8 @@ export class GameEngine {
   private kills = 0;
   private headshots = 0;
   private bossKills = 0;
+  private bossRushRunTimeSec = 0;
+  private bossRushBreakTimer = 0;
   private waveEnemiesRemaining = 0;
   private waveToSpawn = 0;
   private spawnCooldown = 0;
@@ -328,7 +336,7 @@ export class GameEngine {
 
     // ربط الجسر بمخزن Zustand
     useGameStore.getState().setEngineActions({
-      startMission: (mapId) => this.startMission(mapId),
+      startMission: (mapId, mode) => this.startMission(mapId, true, 1, mode),
       resumeMission: () => this.resumeMission(),
       pauseMission: () => this.pauseMission(),
       restartMission: () => this.restartMission(),
@@ -382,14 +390,17 @@ export class GameEngine {
       const waveParam = parseInt(params.get('wave') || '1', 10);
       const startWaveNum = Number.isFinite(waveParam) && waveParam >= 1 ? waveParam : 1;
       const bossParam = params.get('boss');
-      const validBosses: BossArchetypeId[] = ['engineer', 'swarm_queen', 'colossus'];
+      const validBosses: BossArchetypeId[] = ['titan', 'engineer', 'swarm_queen', 'colossus'];
       this.forcedBossArchetype =
         bossParam && validBosses.includes(bossParam as BossArchetypeId)
           ? (bossParam as BossArchetypeId)
           : undefined;
+      const modeParam = params.get('mode');
+      const targetMode: GameMode = modeParam === 'boss_rush' ? 'boss_rush' : 'normal';
       this.pendingFlyingShowcase = params.get('spawn') === 'flying';
+      useGameStore.getState().setSelectedMode(targetMode);
       useGameStore.getState().setSelectedMap(targetMap);
-      this.startMission(targetMap, false, startWaveNum);
+      this.startMission(targetMap, false, startWaveNum, targetMode);
 
       // معاملات اختبار اختيارية لمقارنة أنماط التصويب ومستويات التكبير والبالستية الواقعية
       const weaponParam = params.get('weapon');
@@ -471,8 +482,13 @@ export class GameEngine {
     });
   }
 
-  /** بدء مهمة جديدة (أو متابعة جلسة حالية) */
-  public startMission(mapId?: MapId, tryPointerLock = true, initialWave = 1): void {
+  /** بدء مهمة جديدة (بالوضع العادي أو وضع تحدي الزعماء) */
+  public startMission(
+    mapId?: MapId,
+    tryPointerLock = true,
+    initialWave = 1,
+    mode?: GameMode,
+  ): void {
     if (tryPointerLock) {
       this.audio.init();
       this.audio.resume();
@@ -481,8 +497,10 @@ export class GameEngine {
       document.activeElement.blur();
     }
 
-    const chosenMap = mapId ?? useGameStore.getState().selectedMap;
-    this.resetRun(chosenMap, initialWave);
+    const store = useGameStore.getState();
+    const chosenMap = mapId ?? store.selectedMap;
+    const chosenMode: GameMode = mode ?? store.selectedMode;
+    this.resetRun(chosenMap, initialWave, chosenMode);
 
     this.hasActiveSession = true;
     this.isPlaying = true;
@@ -492,6 +510,7 @@ export class GameEngine {
     useGameStore.getState().setHudPatch({
       hasActiveSession: true,
       settingsOpen: false,
+      activeMode: chosenMode,
       activeMap: chosenMap,
       activeMapName: this.mapManager.activeMap.name,
     });
@@ -529,15 +548,16 @@ export class GameEngine {
     useGameStore.getState().setScreen('paused');
   }
 
-  /** إعادة المحاولة في نفس الخريطة */
+  /** إعادة المحاولة في نفس الخريطة ونفس وضع اللعب */
   public restartMission(): void {
-    this.startMission(this.mapManager.activeMapId, true);
+    this.startMission(this.mapManager.activeMapId, true, 1, this.activeMode);
   }
 
   /** العودة للقائمة الرئيسية مع تشغيل الكاميرا الاستعراضية */
   public returnToMainMenu(): void {
     this.isPlaying = false;
     this.hasActiveSession = false;
+    this.bossRushBreakTimer = 0;
     this.clearHeldInputs();
     this.exitPointerLockSafe();
     this.clearDynamicWorldEntities();
@@ -546,6 +566,7 @@ export class GameEngine {
       hasActiveSession: false,
       settingsOpen: false,
       showScope: false,
+      bossRushBreakTimer: 0,
       boss: { active: false, name: '', phase: 1, hp: 0, maxHp: 1 },
     });
     useGameStore.getState().setScreen('title');
@@ -587,13 +608,18 @@ export class GameEngine {
   }
 
   /** إعادة تهيئة كاملة لجولة لعب جديدة */
-  private resetRun(mapId: MapId, initialWave = 1): void {
+  private resetRun(mapId: MapId, initialWave = 1, mode: GameMode = 'normal'): void {
+    this.activeMode = mode;
     this.clearDynamicWorldEntities();
     this.mapManager.loadMap(mapId);
     this.pools.setMapParticleScale(this.mapManager.activeMap.particleScale ?? 1.0);
     this.player.reset();
     this.player.gravityMult = computeEffectiveGravity(this.mapManager.activeMap.gravityMult, false);
     this.weaponManager.reset();
+    if (this.activeMode === 'boss_rush') {
+      // في وضع تحدي الزعماء: جميع الأسلحة التسعة مفتوحة وممتلئة منذ البداية
+      this.weaponManager.unlockAllWeapons();
+    }
     this.weaponManager.pivot.visible = true;
 
     this.score = 0;
@@ -601,6 +627,8 @@ export class GameEngine {
     this.kills = 0;
     this.headshots = 0;
     this.bossKills = 0;
+    this.bossRushRunTimeSec = 0;
+    this.bossRushBreakTimer = 0;
     this.comboCount = 0;
     this.comboTimer = 0;
     this.killStreak = 0;
@@ -622,10 +650,15 @@ export class GameEngine {
 
     useGameStore.getState().clearKillFeed();
     useGameStore.getState().setHudPatch({
+      activeMode: this.activeMode,
       score: 0,
       wave: initialWave,
       kills: 0,
       headshots: 0,
+      bossRushNumber: initialWave,
+      bossRushDefeated: 0,
+      bossRushRunTimeSec: 0,
+      bossRushBreakTimer: 0,
       comboCount: 0,
       comboRatio: 0,
       killStreak: 0,
@@ -641,6 +674,12 @@ export class GameEngine {
       endSummary: null,
       boss: { active: false, name: '', phase: 1, hp: 0, maxHp: 1 },
     });
+
+    if (this.activeMode === 'boss_rush') {
+      useGameStore
+        .getState()
+        .pushKillFeed('⚔️ تحدي الزعماء: جميع الأسلحة التسعة مفتوحة! استعد للمواجهة!', true, true);
+    }
 
     this.startWave(initialWave);
     this.syncHudImmediate();
@@ -773,7 +812,68 @@ export class GameEngine {
       this.player.grenades = Math.min(this.player.maxGrenades, this.player.grenades + 1);
     }
 
-    // تطبيق معدِّل عشوائي بدءاً من الموجة 3 وكل 3 موجات (3، 6، 9، ...)
+    // وضع تحدي الزعماء: كل موجة هي موجة زعيم تدور بين جميع الزعماء الأربعة مع تدرّج كل دورة
+    if (this.activeMode === 'boss_rush') {
+      this.applyWaveMutator(null);
+      this.waveToSpawn = 0;
+      this.waveEnemiesRemaining = 1;
+      this.bossRushBreakTimer = 0;
+
+      const forcedArchetype = this.forcedBossArchetype;
+      this.forcedBossArchetype = undefined;
+      const archetype = forcedArchetype ?? pickBossRushArchetype(w);
+      const scaling = computeBossRushScaling(w);
+      const scaledMaxHp = computeBossRushMaxHp(w, archetype);
+      const bossSpawnPos = forcedArchetype
+        ? { x: 0, z: -Math.min(24, this.mapManager.halfArena - 10) }
+        : undefined;
+
+      const boss = this.enemyManager.spawn(
+        'boss',
+        w,
+        this.camera.position,
+        bossSpawnPos,
+        undefined,
+        {
+          bossArchetype: archetype,
+          bossScale: {
+            overrideMaxHp: scaledMaxHp,
+            overrideTier: scaling.cycle + 1,
+            damageScale: scaling.dmgMult,
+          },
+        },
+      ) as BossEnemy | null;
+
+      if (boss) {
+        this.syncBossHud(boss);
+        const cycleNote =
+          scaling.cycle > 0
+            ? ` (دورة ${scaling.cycle + 1} · صحة ×${scaling.hpMult.toFixed(2)} · ضرر ×${scaling.dmgMult.toFixed(2)})`
+            : '';
+        this.showBanner(`⚔️ الزعيم #${w}: ${boss.getHudName()}!`, boss.bannerColor);
+        useGameStore
+          .getState()
+          .pushKillFeed(
+            `⚔️ الزعيم #${w}: ${boss.getHudName()}${cycleNote} — ${boss.getHudSubtitle()}`,
+            true,
+            true,
+          );
+      } else {
+        this.showBanner(`⚔️ الزعيم #${w} قادم!`, '#ef4444');
+      }
+      this.audio.play('bossRoar');
+
+      useGameStore.getState().setHudPatch({
+        wave: this.wave,
+        bossRushNumber: this.wave,
+        bossRushBreakTimer: 0,
+        enemiesLeft: this.waveEnemiesRemaining,
+        grenades: this.player.grenades,
+      });
+      return;
+    }
+
+    // تطبيق معدِّل عشوائي بدءاً من الموجة 3 وكل 3 موجات (3، 6، 9، ...) في الوضع العادي
     const mutator = pickWaveMutator(w, Math.random());
     this.applyWaveMutator(mutator);
 
@@ -857,6 +957,7 @@ export class GameEngine {
     useGameStore.getState().setHudPatch({
       showScope: false,
       upgradeWaveCleared: this.wave,
+      bossRushBreakTimer: Number(Math.max(0, this.bossRushBreakTimer).toFixed(1)),
       upgradeOptions: shuffled.map(({ id, icon, title, desc }) => ({ id, icon, title, desc })),
     });
     useGameStore.getState().setScreen('upgrade');
@@ -873,7 +974,14 @@ export class GameEngine {
     useGameStore.getState().pushKillFeed(`⬆️ ترقية: ${chosen.title}`, false, true);
 
     this.isPlaying = true;
-    this.startWave(this.wave + 1);
+    if (this.activeMode === 'boss_rush') {
+      // في تحدي الزعماء: بعد اختيار الترقية يكمل اللاعب ما تبقّى من استراحة الـ 12 ثانية قبل ظهور الزعيم التالي
+      if (this.bossRushBreakTimer <= 0) {
+        this.startWave(this.wave + 1);
+      }
+    } else {
+      this.startWave(this.wave + 1);
+    }
     this.syncHudImmediate();
     useGameStore.getState().setScreen('playing');
     this.requestPointerLockSafe();
@@ -1775,17 +1883,27 @@ export class GameEngine {
       }
     }
 
-    // حفظ الأرقام القياسية أولاً بأول
-    const rec = saveRecords(this.score, this.wave);
-    useGameStore.getState().setHudPatch({
-      score: this.score,
-      kills: this.kills,
-      headshots: this.headshots,
-      killStreak: this.killStreak,
-      enemiesLeft: this.waveEnemiesRemaining,
-      bestScore: rec.bestScore,
-      bestWave: rec.bestWave,
-    });
+    // حفظ الأرقام القياسية للوضع العادي فقط (سجل تحدي الزعماء منفصل ويُحفظ عند نهاية الجولة)
+    if (this.activeMode === 'normal') {
+      const rec = saveRecords(this.score, this.wave);
+      useGameStore.getState().setHudPatch({
+        score: this.score,
+        kills: this.kills,
+        headshots: this.headshots,
+        killStreak: this.killStreak,
+        enemiesLeft: this.waveEnemiesRemaining,
+        bestScore: rec.bestScore,
+        bestWave: rec.bestWave,
+      });
+    } else {
+      useGameStore.getState().setHudPatch({
+        score: this.score,
+        kills: this.kills,
+        headshots: this.headshots,
+        killStreak: this.killStreak,
+        enemiesLeft: this.waveEnemiesRemaining,
+      });
+    }
 
     if (isBoss) {
       this.bossKills++;
@@ -1802,34 +1920,70 @@ export class GameEngine {
       }
       this.waveEnemiesRemaining = 0;
 
-      // فتح مكافآت الأسلحة الخاصة بالباس (أول باس يفتح M134 ميني غان، ملكة السرب تفتح قاذف اللهب، + أسلحة 4-7)
-      const unlockedList = this.weaponManager.unlockBossKillRewards(bossArchetype, this.bossKills);
-      if (unlockedList.length > 0) {
-        this.audio.play('unlock');
-        const namesJoined = unlockedList.map((u) => u.config.name).join(' + ');
-        this.showBanner(`🔓 سلاح جديد: ${namesJoined}!`, '#fde047');
-        for (const unlocked of unlockedList) {
-          useGameStore
-            .getState()
-            .pushKillFeed(
-              `🔓 تم فتح سلاح جديد: ${unlocked.config.name} (مفتاح ${unlocked.config.id + 1})!`,
-              true,
-              true,
-            );
-        }
-      } else {
-        this.score += 1500;
-        this.showBanner('🏆 انتصار أسطوري! +1500 نقطة إضافية!', '#fde047');
-      }
+      if (this.activeMode === 'boss_rush') {
+        // تحدي الزعماء: تخطي مكافآت فتح الأسلحة، استعادة 50% صحة، تعبئة كل الذخيرة والوقود والحرارة، واستراحة 12ث + ترقية
+        const healAmt = Math.round(
+          this.player.maxHealth * PLAYER_CONSTANTS.BOSS_RUSH_HEALTH_RESTORE_RATIO,
+        );
+        this.player.health = Math.min(this.player.maxHealth, this.player.health + healAmt);
+        this.weaponManager.refillAllResourcesFull();
+        this.bossRushBreakTimer = PLAYER_CONSTANTS.BOSS_RUSH_BREAK_DURATION;
+        this.waveDelay = 0.9;
+        this.pendingUpgrade = true;
 
-      this.syncWeaponHud();
-      this.waveDelay = 3.0;
-      this.pendingUpgrade = true;
+        this.audio.play('pickup');
+        this.showBanner(
+          `🏆 هزيمة الزعيم #${this.wave}! استراحة 12ث (+50% صحة وتعبئة كاملة)`,
+          '#4ade80',
+        );
+        useGameStore
+          .getState()
+          .pushKillFeed(
+            `💚 استراحة تحدي الزعماء (12ث): +${healAmt} صحة وإعادة تعبئة كاملة للذخيرة والوقود والحرارة!`,
+            false,
+            true,
+          );
+        useGameStore.getState().setHudPatch({
+          bossRushDefeated: this.bossKills,
+          bossRushBreakTimer: Number(this.bossRushBreakTimer.toFixed(1)),
+          health: Math.ceil(this.player.health),
+          enemiesLeft: 0,
+        });
+        this.syncWeaponHud();
+      } else {
+        // الوضع العادي: فتح مكافآت الأسلحة الخاصة بالباس (أول باس يفتح M134 ميني غان، ملكة السرب تفتح قاذف اللهب، + أسلحة 4-7)
+        const unlockedList = this.weaponManager.unlockBossKillRewards(bossArchetype, this.bossKills);
+        if (unlockedList.length > 0) {
+          this.audio.play('unlock');
+          const namesJoined = unlockedList.map((u) => u.config.name).join(' + ');
+          this.showBanner(`🔓 سلاح جديد: ${namesJoined}!`, '#fde047');
+          for (const unlocked of unlockedList) {
+            useGameStore
+              .getState()
+              .pushKillFeed(
+                `🔓 تم فتح سلاح جديد: ${unlocked.config.name} (مفتاح ${unlocked.config.id + 1})!`,
+                true,
+                true,
+              );
+          }
+        } else {
+          this.score += 1500;
+          this.showBanner('🏆 انتصار أسطوري! +1500 نقطة إضافية!', '#fde047');
+        }
+
+        this.syncWeaponHud();
+        this.waveDelay = 3.0;
+        this.pendingUpgrade = true;
+      }
     } else {
       if (enemyType === 'heavy' || enemyType === 'shielded' || Math.random() < 0.32) {
         this.spawnPickup(dropOrigin);
       }
-      if (this.waveEnemiesRemaining === 0 && this.enemyManager.enemies.length === 0) {
+      if (
+        this.activeMode === 'normal' &&
+        this.waveEnemiesRemaining === 0 &&
+        this.enemyManager.enemies.length === 0
+      ) {
         this.waveDelay = 1.9;
         this.pendingUpgrade = true;
         this.showBanner(`تم تطهير الموجة ${this.wave}!`, '#4ade80');
@@ -1885,8 +2039,37 @@ export class GameEngine {
     this.isGameOver = true;
     this.isPlaying = false;
     this.hasActiveSession = false;
+    this.bossRushBreakTimer = 0;
     this.clearHeldInputs();
     this.exitPointerLockSafe();
+
+    if (this.activeMode === 'boss_rush') {
+      const brRec = saveBossRushRecords(this.bossKills, this.bossRushRunTimeSec);
+      const store = useGameStore.getState();
+      store.setHudPatch({
+        hasActiveSession: false,
+        showScope: false,
+        bossRushBreakTimer: 0,
+        bossRushBestBosses: brRec.bestBosses,
+        bossRushBestTimeSec: brRec.bestTimeSec,
+        endSummary: {
+          mode: 'boss_rush',
+          score: this.score,
+          bestScore: store.bestScore,
+          wave: this.wave,
+          bestWave: store.bestWave,
+          headshots: this.headshots,
+          kills: this.kills,
+          bossKills: this.bossKills,
+          runTimeSec: Number(this.bossRushRunTimeSec.toFixed(1)),
+          bossRushBestBosses: brRec.bestBosses,
+          bossRushBestTimeSec: brRec.bestTimeSec,
+          isNewRecord: brRec.isNewRecord,
+        },
+      });
+      store.setScreen('gameover');
+      return;
+    }
 
     const rec = saveRecords(this.score, this.wave);
     useGameStore.getState().setHudPatch({
@@ -1895,6 +2078,7 @@ export class GameEngine {
       bestScore: rec.bestScore,
       bestWave: rec.bestWave,
       endSummary: {
+        mode: 'normal',
         score: this.score,
         bestScore: rec.bestScore,
         wave: this.wave,
@@ -1915,11 +2099,11 @@ export class GameEngine {
   private handleKeyDown(e: KeyboardEvent): void {
     const store = useGameStore.getState();
 
-    // اختصارات شاشة البداية: Enter أو Space تبدأ اللعب فوراً
+    // اختصارات شاشة البداية: Enter أو Space تبدأ اللعب فوراً بالوضع المختار
     if (store.screen === 'title' && !store.settingsOpen) {
       if (e.code === 'Enter' || e.code === 'Space') {
         e.preventDefault();
-        this.startMission(store.selectedMap, true);
+        this.startMission(store.selectedMap, true, 1, store.selectedMode);
         return;
       }
     }
@@ -2182,6 +2366,10 @@ export class GameEngine {
       comboCount: this.comboCount,
       comboRatio: this.comboTimer > 0 ? this.comboTimer / PLAYER_CONSTANTS.COMBO_DURATION : 0,
       slowMoActive: this.slowMoTimer > 0,
+      bossRushNumber: this.wave,
+      bossRushDefeated: this.bossKills,
+      bossRushRunTimeSec: Number(this.bossRushRunTimeSec.toFixed(1)),
+      bossRushBreakTimer: Number(Math.max(0, this.bossRushBreakTimer).toFixed(1)),
     });
   }
 
@@ -2270,7 +2458,34 @@ export class GameEngine {
     }
     const dt = rawDt * timeScale;
 
+    // استمرار عدّاد استراحة الـ 12 ثانية في تحدي الزعماء حتى أثناء شاشة اختيار الترقية
+    if (
+      this.activeMode === 'boss_rush' &&
+      screen === 'upgrade' &&
+      this.bossRushBreakTimer > 0 &&
+      !this.isGameOver
+    ) {
+      this.bossRushBreakTimer = Math.max(0, this.bossRushBreakTimer - rawDt);
+      this.hudSyncTimer += rawDt;
+      if (this.hudSyncTimer >= 0.1) {
+        this.hudSyncTimer = 0;
+        useGameStore.getState().setHudPatch({
+          bossRushBreakTimer: Number(this.bossRushBreakTimer.toFixed(1)),
+        });
+      }
+      if (this.bossRushBreakTimer <= 0) {
+        this.isPlaying = true;
+        this.startWave(this.wave + 1);
+        this.syncHudImmediate();
+        useGameStore.getState().setScreen('playing');
+        this.requestPointerLockSafe();
+      }
+    }
+
     if (this.isPlaying) {
+      if (this.activeMode === 'boss_rush') {
+        this.bossRushRunTimeSec += rawDt;
+      }
       if (this.comboTimer > 0) {
         this.comboTimer = Math.max(0, this.comboTimer - rawDt);
         if (this.comboTimer <= 0) this.comboCount = 0;
@@ -2373,8 +2588,26 @@ export class GameEngine {
         activeWeapon.getScopeSwayAmplitude(),
       );
 
-      // 4. إدارة الموجات وتوليد الأعداء
-      if (this.waveDelay > 0) {
+      // 4. إدارة الموجات وتوليد الأعداء (أو استراحة الـ 12 ثانية في وضع تحدي الزعماء)
+      if (this.activeMode === 'boss_rush') {
+        if (this.bossRushBreakTimer > 0) {
+          this.bossRushBreakTimer = Math.max(0, this.bossRushBreakTimer - rawDt);
+        }
+        if (this.waveDelay > 0) {
+          this.waveDelay -= rawDt;
+          if (this.waveDelay <= 0 && this.pendingUpgrade) {
+            this.pendingUpgrade = false;
+            this.openUpgradeScreen();
+          }
+        } else if (
+          !this.pendingUpgrade &&
+          this.bossRushBreakTimer <= 0 &&
+          !this.enemyManager.activeBoss &&
+          this.waveEnemiesRemaining === 0
+        ) {
+          this.startWave(this.wave + 1);
+        }
+      } else if (this.waveDelay > 0) {
         this.waveDelay -= rawDt;
         if (this.waveDelay <= 0) {
           if (this.pendingUpgrade) {
@@ -2442,6 +2675,7 @@ export class GameEngine {
             this.waveEnemiesRemaining = Math.max(0, this.waveEnemiesRemaining - 1);
             useGameStore.getState().setHudPatch({ enemiesLeft: this.waveEnemiesRemaining });
             if (
+              this.activeMode === 'normal' &&
               this.waveEnemiesRemaining === 0 &&
               this.enemyManager.enemies.length === 0 &&
               !this.pendingUpgrade &&

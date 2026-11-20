@@ -1,5 +1,6 @@
 import type {
   BossArchetypeId,
+  BossRushRecords,
   EliteAffixId,
   EnemyTypeId,
   GameSettings,
@@ -89,11 +90,17 @@ export const PLAYER_CONSTANTS = {
   BURN_DURATION: 3.0,
   FLAME_PARTICLE_CAP_HIGH: 120,
   FLAME_PARTICLE_CAP_LOW: 48,
+  BOSS_RUSH_BREAK_DURATION: 12.0,
+  BOSS_RUSH_HEALTH_RESTORE_RATIO: 0.5,
+  BOSS_RUSH_CYCLE_HP_MULT: 1.35,
+  BOSS_RUSH_CYCLE_DMG_MULT: 1.15,
 } as const;
 
 export const STORAGE_KEYS = {
   BEST_SCORE: 'sniper_protocol_best_score_v1',
   BEST_WAVE: 'sniper_protocol_best_wave_v1',
+  BOSS_RUSH_BEST_BOSSES: 'sniper_protocol_boss_rush_best_bosses_v1',
+  BOSS_RUSH_BEST_TIME: 'sniper_protocol_boss_rush_best_time_v1',
   SETTINGS: 'sniper_protocol_settings_v1',
 } as const;
 
@@ -306,12 +313,53 @@ export function computeHitDamage(params: {
   return { damage: rawDmg * dmgMult * bodyMult, isCrit: false, isShieldBlock: false };
 }
 
-/** ترتيب دوران الزعماء الثلاثة كل 5 موجات (الموجة 5 المهندس، 10 ملكة السرب، 15 العملاق الجبار...) */
+/** ترتيب دوران الزعماء الثلاثة في الوضع العادي كل 5 موجات (الموجة 5 المهندس، 10 ملكة السرب، 15 العملاق الجبار...) */
 export const BOSS_ROTATION: BossArchetypeId[] = ['engineer', 'swarm_queen', 'colossus'];
+
+/** ترتيب دوران جميع الزعماء الأربعة في وضع تحدي الزعماء (الزعيم الأساسي، المهندس، ملكة السرب، العملاق الجبار) */
+export const BOSS_RUSH_ROTATION: BossArchetypeId[] = [
+  'titan',
+  'engineer',
+  'swarm_queen',
+  'colossus',
+];
 
 export function pickBossArchetypeForWave(wave: number): BossArchetypeId {
   const tierIndex = Math.max(0, Math.floor(wave / 5) - 1);
   return BOSS_ROTATION[tierIndex % BOSS_ROTATION.length];
+}
+
+/** اختيار الزعيم المناسب لرقم الموجة في وضع تحدي الزعماء */
+export function pickBossRushArchetype(bossNumber: number): BossArchetypeId {
+  const idx = Math.max(0, Math.floor(bossNumber) - 1);
+  return BOSS_RUSH_ROTATION[idx % BOSS_RUSH_ROTATION.length];
+}
+
+/** حساب رقم الدورة الكاملة في تحدي الزعماء (تبدأ من 0 للزعماء 1-4، ثم 1 للزعماء 5-8 وهكذا) */
+export function computeBossRushCycle(bossNumber: number): number {
+  const idx = Math.max(0, Math.floor(bossNumber) - 1);
+  return Math.floor(idx / BOSS_RUSH_ROTATION.length);
+}
+
+/** حساب مضاعفات الصحة (×1.35 لكل دورة) والضرر (×1.15 لكل دورة) في تحدي الزعماء */
+export function computeBossRushScaling(bossNumber: number): {
+  cycle: number;
+  hpMult: number;
+  dmgMult: number;
+} {
+  const cycle = computeBossRushCycle(bossNumber);
+  return {
+    cycle,
+    hpMult: Math.pow(PLAYER_CONSTANTS.BOSS_RUSH_CYCLE_HP_MULT, cycle),
+    dmgMult: Math.pow(PLAYER_CONSTANTS.BOSS_RUSH_CYCLE_DMG_MULT, cycle),
+  };
+}
+
+/** حساب الصحة القصوى للزعيم في تحدي الزعماء (الصحة الأساسية للزعيم × 1.35^الدورة) */
+export function computeBossRushMaxHp(bossNumber: number, archetype: BossArchetypeId): number {
+  const baseHp = computeBossMaxHp(5, archetype);
+  const { hpMult } = computeBossRushScaling(bossNumber);
+  return Math.round(baseHp * hpMult);
 }
 
 export function getBossArchetypeMeta(archetype: BossArchetypeId): {
@@ -320,6 +368,12 @@ export function getBossArchetypeMeta(archetype: BossArchetypeId): {
   bannerColor: string;
 } {
   switch (archetype) {
+    case 'titan':
+      return {
+        name: 'تيتان أوميغا',
+        subtitle: 'الزعيم القيادي المدرّع — صواريخ كتف وموجات صدمة، استهدف المفاعل الخلفي أو الرأس',
+        bannerColor: '#dc2626',
+      };
     case 'engineer':
       return {
         name: 'المهندس المدرّع',
@@ -483,6 +537,94 @@ export function saveRecords(score: number, wave: number): { bestScore: number; b
     // تجاهل أخطاء التخزين في وضع التصفح الخاص
   }
   return { bestScore, bestWave, isNewRecord };
+}
+
+/** تنسيق زمن الجولة بصيغة دقيقة:ثانية (MM:SS) */
+export function formatRunTimer(totalSeconds: number): string {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+/** مقارنة وتحديث أفضل سجل في تحدي الزعماء (أكثر زعماء مهزومين، وعند التعادل أسرع زمن) */
+export function evaluateBossRushRecord(
+  prev: BossRushRecords,
+  bossesDefeated: number,
+  runTimeSec: number,
+): { bestBosses: number; bestTimeSec: number | null; isNewRecord: boolean } {
+  const cleanBosses = Math.max(0, Math.floor(bossesDefeated));
+  const cleanTime = Math.max(0, Number(runTimeSec.toFixed(1)));
+
+  if (cleanBosses <= 0) {
+    return {
+      bestBosses: prev.bestBosses,
+      bestTimeSec: prev.bestTimeSec,
+      isNewRecord: false,
+    };
+  }
+
+  if (cleanBosses > prev.bestBosses) {
+    return {
+      bestBosses: cleanBosses,
+      bestTimeSec: cleanTime,
+      isNewRecord: true,
+    };
+  }
+
+  if (cleanBosses === prev.bestBosses) {
+    if (prev.bestTimeSec === null || cleanTime < prev.bestTimeSec) {
+      return {
+        bestBosses: cleanBosses,
+        bestTimeSec: cleanTime,
+        isNewRecord: true,
+      };
+    }
+  }
+
+  return {
+    bestBosses: prev.bestBosses,
+    bestTimeSec: prev.bestTimeSec,
+    isNewRecord: false,
+  };
+}
+
+/** قراءة أفضل سجل لوضع تحدي الزعماء من localStorage بشكل منفصل عن الوضع العادي */
+export function loadBossRushRecords(): BossRushRecords {
+  try {
+    if (typeof localStorage === 'undefined') return { bestBosses: 0, bestTimeSec: null };
+    const bestBosses = Math.max(
+      0,
+      parseInt(localStorage.getItem(STORAGE_KEYS.BOSS_RUSH_BEST_BOSSES) || '0', 10) || 0,
+    );
+    const rawTime = localStorage.getItem(STORAGE_KEYS.BOSS_RUSH_BEST_TIME);
+    const parsedTime = rawTime !== null ? parseFloat(rawTime) : NaN;
+    const bestTimeSec =
+      bestBosses > 0 && Number.isFinite(parsedTime) && parsedTime >= 0 ? parsedTime : null;
+    return { bestBosses, bestTimeSec };
+  } catch {
+    return { bestBosses: 0, bestTimeSec: null };
+  }
+}
+
+/** حفظ أفضل سجل لوضع تحدي الزعماء بشكل منفصل في localStorage */
+export function saveBossRushRecords(
+  bossesDefeated: number,
+  runTimeSec: number,
+): { bestBosses: number; bestTimeSec: number | null; isNewRecord: boolean } {
+  const prev = loadBossRushRecords();
+  const next = evaluateBossRushRecord(prev, bossesDefeated, runTimeSec);
+  try {
+    if (typeof localStorage !== 'undefined' && next.isNewRecord) {
+      localStorage.setItem(STORAGE_KEYS.BOSS_RUSH_BEST_BOSSES, String(next.bestBosses));
+      if (next.bestTimeSec !== null) {
+        localStorage.setItem(STORAGE_KEYS.BOSS_RUSH_BEST_TIME, String(next.bestTimeSec));
+      }
+    }
+  } catch {
+    // تجاهل أخطاء التخزين في وضع التصفح الخاص
+  }
+  return next;
 }
 
 export function loadSettings(): GameSettings {

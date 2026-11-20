@@ -2,13 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   BOSS_ROTATION,
+  BOSS_RUSH_ROTATION,
   DEFAULT_SETTINGS,
   ELITE_AFFIXES,
   PLAYER_CONSTANTS,
+  STORAGE_KEYS,
   WAVE_MUTATORS,
   applyBurnStatus,
   computeBossMaxHp,
   computeBossPhase,
+  computeBossRushCycle,
+  computeBossRushMaxHp,
+  computeBossRushScaling,
   computeComboMultiplier,
   computeEffectiveFogDensity,
   computeEffectiveGravity,
@@ -17,12 +22,15 @@ import {
   computeSlideSpeed,
   computeWaveEnemyCount,
   computeZoomSensitivityMultiplier,
+  evaluateBossRushRecord,
+  formatRunTimer,
   getBossArchetypeMeta,
   getKillStreakReward,
   getMapDisplayName,
   isBulletHittingPlayerHeight,
   isPointInFlameCone,
   pickBossArchetypeForWave,
+  pickBossRushArchetype,
   pickEnemyTypeForWave,
   pickWaveMutator,
   rollEliteAffix,
@@ -419,4 +427,93 @@ test('حالة الاحتراق (8 ضرر/ث لمدة 3ث تُجدّد دون ت
   });
   assert.equal(flameVsShield.damage, 5);
   assert.equal(flameVsShield.isShieldBlock, true);
+});
+
+test('قواعد وضع تحدي الزعماء: دوران الزعماء الأربعة وتدرج الصحة ×1.35 والضرر ×1.15 لكل دورة', () => {
+  assert.deepEqual(BOSS_RUSH_ROTATION, ['titan', 'engineer', 'swarm_queen', 'colossus']);
+  assert.equal(getBossArchetypeMeta('titan').name, 'تيتان أوميغا');
+
+  // الدورة الأولى (الزعماء 1-4)
+  assert.equal(pickBossRushArchetype(1), 'titan');
+  assert.equal(pickBossRushArchetype(2), 'engineer');
+  assert.equal(pickBossRushArchetype(3), 'swarm_queen');
+  assert.equal(pickBossRushArchetype(4), 'colossus');
+
+  // الدورة الثانية (الزعماء 5-8) تعيد نفس الترتيب مع مضاعفات ×1.35 صحة و×1.15 ضرر
+  assert.equal(pickBossRushArchetype(5), 'titan');
+  assert.equal(pickBossRushArchetype(6), 'engineer');
+  assert.equal(pickBossRushArchetype(7), 'swarm_queen');
+  assert.equal(pickBossRushArchetype(8), 'colossus');
+
+  assert.equal(computeBossRushCycle(1), 0);
+  assert.equal(computeBossRushCycle(4), 0);
+  assert.equal(computeBossRushCycle(5), 1);
+  assert.equal(computeBossRushCycle(8), 1);
+  assert.equal(computeBossRushCycle(9), 2);
+
+  const cycle0 = computeBossRushScaling(1);
+  assert.equal(cycle0.cycle, 0);
+  assert.equal(cycle0.hpMult, 1);
+  assert.equal(cycle0.dmgMult, 1);
+
+  const cycle1 = computeBossRushScaling(5);
+  assert.equal(cycle1.cycle, 1);
+  assert.ok(Math.abs(cycle1.hpMult - 1.35) < 1e-6);
+  assert.ok(Math.abs(cycle1.dmgMult - 1.15) < 1e-6);
+
+  const cycle2 = computeBossRushScaling(9);
+  assert.equal(cycle2.cycle, 2);
+  assert.ok(Math.abs(cycle2.hpMult - 1.35 * 1.35) < 1e-6);
+  assert.ok(Math.abs(cycle2.dmgMult - 1.15 * 1.15) < 1e-6);
+
+  // التحقق من الصحة المحسوبة لكل زعيم عبر الدورات
+  assert.equal(computeBossRushMaxHp(1, 'titan'), 900);
+  assert.equal(computeBossRushMaxHp(5, 'titan'), Math.round(900 * 1.35));
+  assert.equal(computeBossRushMaxHp(4, 'colossus'), 1125);
+  assert.equal(computeBossRushMaxHp(8, 'colossus'), Math.round(1125 * 1.35));
+  assert.equal(computeBossRushMaxHp(9, 'titan'), Math.round(900 * 1.35 * 1.35));
+
+  assert.equal(PLAYER_CONSTANTS.BOSS_RUSH_BREAK_DURATION, 12.0);
+  assert.equal(PLAYER_CONSTANTS.BOSS_RUSH_HEALTH_RESTORE_RATIO, 0.5);
+});
+
+test('تنسيق زمن الجولة وتقييم أفضل سجل منفصل لتحدي الزعماء (أكثر زعماء مهزومين وأسرع زمن)', () => {
+  assert.equal(formatRunTimer(0), '00:00');
+  assert.equal(formatRunTimer(65), '01:05');
+  assert.equal(formatRunTimer(609.8), '10:09');
+
+  // مفاتيح التخزين منفصلة تماماً عن مفاتيح الوضع العادي
+  assert.notEqual(STORAGE_KEYS.BOSS_RUSH_BEST_BOSSES, STORAGE_KEYS.BEST_SCORE);
+  assert.notEqual(STORAGE_KEYS.BOSS_RUSH_BEST_TIME, STORAGE_KEYS.BEST_WAVE);
+
+  const empty = { bestBosses: 0, bestTimeSec: null };
+
+  // هزيمة 0 زعماء لا تُسجّل رقماً قياسياً
+  const r0 = evaluateBossRushRecord(empty, 0, 45);
+  assert.equal(r0.isNewRecord, false);
+  assert.equal(r0.bestBosses, 0);
+  assert.equal(r0.bestTimeSec, null);
+
+  // أول جولة ناجحة (3 زعماء خلال 180ث) تسجّل رقماً قياسياً
+  const r1 = evaluateBossRushRecord(empty, 3, 180);
+  assert.equal(r1.isNewRecord, true);
+  assert.equal(r1.bestBosses, 3);
+  assert.equal(r1.bestTimeSec, 180);
+
+  // نفس عدد الزعماء بزمن أبطأ لا يكسر الرقم القياسي
+  const r2 = evaluateBossRushRecord({ bestBosses: 3, bestTimeSec: 180 }, 3, 210);
+  assert.equal(r2.isNewRecord, false);
+  assert.equal(r2.bestTimeSec, 180);
+
+  // نفس عدد الزعماء بزمن أسرع يكسر الرقم القياسي
+  const r3 = evaluateBossRushRecord({ bestBosses: 3, bestTimeSec: 180 }, 3, 142.4);
+  assert.equal(r3.isNewRecord, true);
+  assert.equal(r3.bestBosses, 3);
+  assert.equal(r3.bestTimeSec, 142.4);
+
+  // عدد زعماء أكبر يتفوق دائماً حتى لو كان الزمن أطول
+  const r4 = evaluateBossRushRecord({ bestBosses: 3, bestTimeSec: 142.4 }, 5, 310);
+  assert.equal(r4.isNewRecord, true);
+  assert.equal(r4.bestBosses, 5);
+  assert.equal(r4.bestTimeSec, 310);
 });
