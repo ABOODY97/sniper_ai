@@ -40,7 +40,8 @@ export class SemiAutoSniper extends WeaponBase {
         sfx: 'dmr',
         isSniper: true,
         restPos: new THREE.Vector3(0.28, -0.24, -0.5),
-        adsPos: new THREE.Vector3(0.0, -0.15, -0.32),
+        // محور المنظار عند y=0.115 محاذي لمحور الكاميرا، ومؤخرة الهيكل عند z=-0.26
+        adsPos: new THREE.Vector3(0.0, -0.115, -0.49),
       },
       materials,
     );
@@ -48,18 +49,21 @@ export class SemiAutoSniper extends WeaponBase {
 
   protected buildModel(m: WeaponMaterials): THREE.Group {
     const group = new THREE.Group();
-    const body = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.1, 0.14, 0.62)), m.darkMetal);
+    const body = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.095, 0.13, 0.56)), m.darkMetal);
+    body.position.set(0, 0, -0.05);
+
     const barrel = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.02, 0.02, 0.54, 10)), m.gunMetal);
     barrel.rotation.x = Math.PI / 2;
     barrel.position.set(0, 0.035, -0.52);
 
     const scope = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.03, 0.028, 0.26, 10)), m.gunMetal);
     scope.rotation.x = Math.PI / 2;
-    scope.position.set(0, 0.115, -0.04);
+    scope.position.set(0, 0.115, -0.06);
 
-    const glowMat = this.track(new THREE.MeshBasicMaterial({ color: 0x22c55e }));
-    const glow = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.106, 0.022, 0.42)), glowMat);
-    glow.position.set(0, 0.04, -0.1);
+    const glowMat = this.track(new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 1 }));
+    const glow = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.102, 0.02, 0.38)), glowMat);
+    glow.position.set(0, 0.038, -0.1);
+    this.registerAdsDimPart(glow, glowMat, 1, 0, 0.55);
 
     group.add(body, barrel, scope, glow);
     return group;

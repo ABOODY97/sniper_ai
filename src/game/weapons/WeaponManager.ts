@@ -37,8 +37,12 @@ export class WeaponManager {
   public fireRateMult = 1.0;
 
   private readonly _muzzleLocal = new THREE.Vector3(0, 0.04, -0.78);
+  private readonly _adsLerpPos = new THREE.Vector3();
+  private drawDipY = 0;
+  private reloadDipY = 0;
+  private sprintDipY = 0;
 
-  constructor(camera: THREE.PerspectiveCamera) {
+  constructor(weaponCamera: THREE.PerspectiveCamera) {
     this.sharedMaterials = {
       darkMetal: new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.82, roughness: 0.24 }),
       gunMetal: new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.62, roughness: 0.36 }),
@@ -66,7 +70,49 @@ export class WeaponManager {
       this.pivot.add(w.model);
     });
 
-    camera.add(this.pivot);
+    weaponCamera.add(this.pivot);
+
+    if (import.meta.env.DEV) {
+      this.validateAdsClearance(0.2);
+    }
+  }
+
+  /** فحص تلقائي في وضع التطوير للتحقق من أن أقرب جزء من كل سلاح في وضع ADS يبعد > 0.2م عن الكاميرا */
+  private validateAdsClearance(minDist = 0.2): void {
+    const localBox = new THREE.Box3();
+    const meshBox = new THREE.Box3();
+    const invModelMat = new THREE.Matrix4();
+    const relMat = new THREE.Matrix4();
+
+    for (const w of this.weapons) {
+      const prevVis = w.model.visible;
+      w.model.visible = true;
+      w.model.updateWorldMatrix(true, true);
+      invModelMat.copy(w.model.matrixWorld).invert();
+      localBox.makeEmpty();
+
+      w.model.traverse((obj) => {
+        if (obj instanceof THREE.Mesh && obj.geometry) {
+          if (!obj.geometry.boundingBox) {
+            obj.geometry.computeBoundingBox();
+          }
+          if (obj.geometry.boundingBox) {
+            relMat.multiplyMatrices(invModelMat, obj.matrixWorld);
+            meshBox.copy(obj.geometry.boundingBox).applyMatrix4(relMat);
+            localBox.union(meshBox);
+          }
+        }
+      });
+
+      w.model.visible = prevVis;
+      const camSpaceMaxZ = localBox.max.z + w.config.adsPos.z;
+      const clearance = -camSpaceMaxZ;
+      if (clearance < minDist) {
+        console.warn(
+          `[WeaponADS] تحذير: السلاح "${w.config.name}" أقرب من الحد الآمن في وضع ADS (المسافة=${clearance.toFixed(3)}م، الحد=${minDist}م، maxZ=${camSpaceMaxZ.toFixed(3)})`,
+        );
+      }
+    }
   }
 
   public get current(): WeaponBase {
@@ -84,6 +130,9 @@ export class WeaponManager {
     this.weaponKickZ = 0;
     this.swayX = 0;
     this.swayY = 0;
+    this.drawDipY = 0;
+    this.reloadDipY = 0;
+    this.sprintDipY = 0;
     this.customHint = '';
 
     this.weapons.forEach((w, idx) => {
@@ -93,6 +142,22 @@ export class WeaponManager {
     this.currentIndex = 0;
     this.pivot.position.copy(this.current.config.restPos);
     this.pivot.rotation.set(0, 0, 0);
+  }
+
+  /** تثبيت السلاح فوراً على نسبة تصويب محددة (لبدء المشهد أو الاختبار المباشر دون انتظار الانتقال) */
+  public snapToAdsBlend(adsBlend: number): void {
+    const t = Math.max(0, Math.min(1, adsBlend));
+    const w = this.current.config;
+    this.weaponKickZ = 0;
+    this.swayX = 0;
+    this.swayY = 0;
+    this.drawDipY = 0;
+    this.reloadDipY = 0;
+    this.sprintDipY = 0;
+    this.pivot.position.lerpVectors(w.restPos, w.adsPos, t);
+    this.pivot.rotation.set(0, 0, 0);
+    this.current.applyAdsVisuals(t);
+    this.pivot.updateMatrixWorld(true);
   }
 
   /** تبديل السلاح بالرقم (0-8 للمفاتيح 1-9) */
@@ -117,7 +182,8 @@ export class WeaponManager {
     this.weapons[this.currentIndex].model.visible = false;
     this.currentIndex = idx;
     this.weapons[this.currentIndex].model.visible = true;
-    this.pivot.position.y -= 0.18;
+    this.weapons[this.currentIndex].applyAdsVisuals(0);
+    this.drawDipY = -0.18;
     this.fireCooldown = 0.2;
     return { switched: true };
   }
@@ -250,16 +316,17 @@ export class WeaponManager {
     }
   }
 
-  /** حساب الموقع العالمي لفوهة السلاح الحالي */
+  /** حساب الموقع العالمي لفوهة السلاح الحالي بدقة بعد مزامنة كاميرا السلاح */
   public getMuzzleWorldPosition(out: THREE.Vector3): THREE.Vector3 {
+    this.pivot.updateWorldMatrix(true, false);
     out.copy(this._muzzleLocal);
     return this.pivot.localToWorld(out);
   }
 
-  /** تحديث مؤقتات الإطلاق والتلقيم وحركة السلاح الناعمة */
+  /** تحديث مؤقتات الإطلاق والتلقيم وحركة السلاح الناعمة المقادة بمعامل adsBlend الموحّد (0 → 1) */
   public update(
     rawDt: number,
-    activeADS: boolean,
+    adsBlend: number,
     isMoving: boolean,
     onGround: boolean,
     isSprinting: boolean,
@@ -285,28 +352,48 @@ export class WeaponManager {
       }
     }
 
+    const t = Math.max(0, Math.min(1, adsBlend));
+    const hipFactor = 1 - t;
     const w = this.current.config;
-    this.weaponKickZ = Math.max(0, this.weaponKickZ - rawDt * 1.1);
+
+    // تخفيف التأثيرات المضيئة والجانبية في نموذج السلاح بالتزامن مع معامل التصويب
+    this.current.applyAdsVisuals(t);
+
+    this.weaponKickZ = Math.max(0, this.weaponKickZ - rawDt * 1.15);
     const swayDamp = 1 - Math.exp(-10 * rawDt);
     this.swayX += (0 - this.swayX) * swayDamp;
     this.swayY += (0 - this.swayY) * swayDamp;
 
-    const targetPos = activeADS ? w.adsPos : w.restPos;
-    const bobAmpX = isSprinting ? 0.026 : 0.012;
-    const bobAmpY = isSprinting ? 0.03 : 0.014;
-    const bobX = isMoving && onGround && !activeADS && !isSliding ? Math.cos(bobTimer) * bobAmpX : 0;
-    const bobY = isMoving && onGround && !activeADS && !isSliding ? Math.abs(Math.sin(bobTimer)) * bobAmpY : 0;
-    const reloadDip = this.isReloading ? -0.16 : 0;
-    const sprintDip = isSprinting ? -0.065 : 0;
-    const targetRotX = this.isReloading ? -0.45 : isSprinting ? -0.26 : this.weaponKickZ * 1.4;
-    const targetRotZ = isSprinting ? 0.14 : isSliding && !activeADS ? -0.1 : 0;
+    // تخميد موحّد للإزاحات الثانوية (سحب السلاح، التلقيم، الركض) دون الإخلال بمسار adsBlend الرئيسي
+    const auxDamp = 1 - Math.exp(-14 * rawDt);
+    this.drawDipY += (0 - this.drawDipY) * auxDamp;
+    const targetReloadDip = this.isReloading ? -0.16 : 0;
+    const targetSprintDip = isSprinting ? -0.065 * hipFactor : 0;
+    this.reloadDipY += (targetReloadDip - this.reloadDipY) * auxDamp;
+    this.sprintDipY += (targetSprintDip - this.sprintDipY) * auxDamp;
 
-    const posDamp = 1 - Math.exp(-14 * rawDt);
-    const zDamp = 1 - Math.exp(-18 * rawDt);
-    this.pivot.position.x += (targetPos.x + bobX + this.swayX - this.pivot.position.x) * posDamp;
-    this.pivot.position.y += (targetPos.y - bobY + this.swayY + reloadDip + sprintDip - this.pivot.position.y) * posDamp;
-    this.pivot.position.z += (targetPos.z + this.weaponKickZ - this.pivot.position.z) * zDamp;
-    this.pivot.rotation.x += (targetRotX - this.pivot.rotation.x) * posDamp;
+    const bobAmpX = (isSprinting ? 0.026 : 0.012) * hipFactor;
+    const bobAmpY = (isSprinting ? 0.03 : 0.014) * hipFactor;
+    const bobX = isMoving && onGround && !isSliding ? Math.cos(bobTimer) * bobAmpX : 0;
+    const bobY = isMoving && onGround && !isSliding ? Math.abs(Math.sin(bobTimer)) * bobAmpY : 0;
+
+    // موضع السلاح الأساسي يتبع adsBlend مباشرةً بتزامن تام مع زاوية رؤية الكاميرا
+    this._adsLerpPos.lerpVectors(w.restPos, w.adsPos, t);
+    const swayScale = 1 - t * 0.8;
+    const kickScale = 1 - t * 0.45;
+    this.pivot.position.set(
+      this._adsLerpPos.x + bobX + this.swayX * swayScale,
+      this._adsLerpPos.y - bobY + this.swayY * swayScale + this.drawDipY + this.reloadDipY + this.sprintDipY,
+      this._adsLerpPos.z + this.weaponKickZ * kickScale,
+    );
+
+    const targetRotX = this.isReloading
+      ? -0.45
+      : isSprinting
+        ? -0.26 * hipFactor
+        : this.weaponKickZ * (1.2 - t * 0.65);
+    const targetRotZ = isSprinting ? 0.14 * hipFactor : isSliding ? -0.1 * hipFactor : 0;
+    this.pivot.rotation.x += (targetRotX - this.pivot.rotation.x) * auxDamp;
     this.pivot.rotation.z += (targetRotZ - this.pivot.rotation.z) * (1 - Math.exp(-12 * rawDt));
 
     if (this.muzzleLight.intensity > 0) {

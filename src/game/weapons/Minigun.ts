@@ -64,7 +64,8 @@ export class Minigun extends WeaponBase {
         moveSpeedMultWhileActive: PLAYER_CONSTANTS.MINIGUN_MOVE_SPEED_MULT,
         restrictMobilityWhileActive: true,
         restPos: new THREE.Vector3(0.3, -0.34, -0.56),
-        adsPos: new THREE.Vector3(0.14, -0.25, -0.5),
+        // حلقة التصويب الجانبية على مقبض الحمل (-0.075, 0.185) محاذية لمركز الشاشة (0, 0) والمؤخرة عند z=-0.34
+        adsPos: new THREE.Vector3(0.075, -0.185, -0.48),
       },
       materials,
     );
@@ -139,6 +140,24 @@ export class Minigun extends WeaponBase {
     );
     hazardStripe.position.set(0, 0.06, -0.14);
 
+    // حلقة تصويب تكتيكية مفتوحة على يسار مقبض الحمل العلوي لوضع خط النظر على (0, 0) في وضع ADS
+    const sightMount = new THREE.Mesh(
+      this.track(new THREE.BoxGeometry(0.028, 0.012, 0.018)),
+      m.darkMetal,
+    );
+    sightMount.position.set(-0.065, 0.16, -0.08);
+    const sightRing = new THREE.Mesh(
+      this.track(new THREE.TorusGeometry(0.022, 0.0032, 8, 18)),
+      m.darkMetal,
+    );
+    sightRing.position.set(-0.075, 0.185, -0.08);
+    const sightDotMat = this.track(new THREE.MeshBasicMaterial({ color: 0xf59e0b }));
+    const sightDot = new THREE.Mesh(
+      this.track(new THREE.SphereGeometry(0.0022, 8, 8)),
+      sightDotMat,
+    );
+    sightDot.position.set(-0.075, 0.185, -0.08);
+
     // مجموعة السبطانات الست الدوّارة
     this.barrelCluster = new THREE.Group();
     this.barrelCluster.position.set(0, -0.01, -0.48);
@@ -175,6 +194,9 @@ export class Minigun extends WeaponBase {
       ammoDrum,
       feedChute,
       hazardStripe,
+      sightMount,
+      sightRing,
+      sightDot,
       this.barrelCluster,
     );
     return g;
@@ -200,6 +222,7 @@ export class Minigun extends WeaponBase {
   }
 
   public override onHolster(): void {
+    super.onHolster();
     this.spinProgress = 0;
   }
 

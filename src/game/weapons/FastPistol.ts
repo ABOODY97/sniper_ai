@@ -33,7 +33,8 @@ export class FastPistol extends WeaponBase {
         color: 0x2dd4bf,
         sfx: 'pistol',
         restPos: new THREE.Vector3(0.24, -0.22, -0.42),
-        adsPos: new THREE.Vector3(0.0, -0.095, -0.27),
+        // خط الناشنكاه الحديدي عند y=0.091 محاذي لمحور الكاميرا، والمؤخرة عند z≈-0.336
+        adsPos: new THREE.Vector3(0.0, -0.091, -0.44),
       },
       materials,
     );
@@ -52,11 +53,12 @@ export class FastPistol extends WeaponBase {
     muzzle.rotation.x = Math.PI / 2;
     muzzle.position.set(0, 0.035, -0.28);
 
-    const glowMat = this.track(new THREE.MeshBasicMaterial({ color: 0x2dd4bf }));
+    const glowMat = this.track(new THREE.MeshBasicMaterial({ color: 0x2dd4bf, transparent: true, opacity: 1 }));
     const glow = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.08, 0.02, 0.24)), glowMat);
     glow.position.set(0, 0.045, -0.1);
+    this.registerAdsDimPart(glow, glowMat, 1, 0, 0.55);
 
-    // ناشنكاه حديدي ثلاثي النقاط (Iron Sights): ثلمة خلفية بعمودين + سن أمامي مضيء
+    // ناشنكاه حديدي ثلاثي النقاط (Iron Sights): ثلمة خلفية بعمودين + سن أمامي مضيء على خط نظر واحد y=0.091
     const rearPostGeo = this.track(new THREE.BoxGeometry(0.014, 0.022, 0.016));
     const rearL = new THREE.Mesh(rearPostGeo, m.darkMetal);
     rearL.position.set(-0.022, 0.086, 0.075);
@@ -66,9 +68,9 @@ export class FastPistol extends WeaponBase {
     const tritiumGeo = this.track(new THREE.BoxGeometry(0.0055, 0.0055, 0.004));
     const rearDotMat = this.track(new THREE.MeshBasicMaterial({ color: 0x5eead4 }));
     const rearDotL = new THREE.Mesh(tritiumGeo, rearDotMat);
-    rearDotL.position.set(-0.022, 0.089, 0.084);
+    rearDotL.position.set(-0.022, 0.091, 0.084);
     const rearDotR = new THREE.Mesh(tritiumGeo, rearDotMat);
-    rearDotR.position.set(0.022, 0.089, 0.084);
+    rearDotR.position.set(0.022, 0.091, 0.084);
 
     const frontBlade = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.009, 0.024, 0.016)), m.darkMetal);
     frontBlade.position.set(0, 0.087, -0.242);

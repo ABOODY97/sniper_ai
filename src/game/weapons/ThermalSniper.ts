@@ -41,8 +41,9 @@ export class ThermalSniper extends WeaponBase {
         ballistics: { speed: 220, gravity: 8.0, maxLife: 2.2 },
         color: 0xf59e0b,
         sfx: 'thermalSniper',
-        restPos: new THREE.Vector3(0.29, -0.25, -0.54),
-        adsPos: new THREE.Vector3(0.0, -0.16, -0.3),
+        restPos: new THREE.Vector3(0.28, -0.24, -0.54),
+        // محور المنظار الحراري عند y=0.14 محاذي لمحور الكاميرا، ومؤخرة الهيكل عند z=-0.26
+        adsPos: new THREE.Vector3(0.0, -0.14, -0.49),
       },
       materials,
     );
@@ -53,23 +54,28 @@ export class ThermalSniper extends WeaponBase {
     const chassisMat = this.track(
       new THREE.MeshStandardMaterial({ color: 0x292524, metalness: 0.85, roughness: 0.22 }),
     );
-    const body = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.13, 0.16, 0.7)), chassisMat);
-    const barrel = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.07, 0.08, 0.78)), m.gunMetal);
+    const body = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.12, 0.15, 0.6)), chassisMat);
+    body.position.set(0, 0, -0.07);
+
+    const barrel = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.068, 0.075, 0.78)), m.gunMetal);
     barrel.position.set(0, 0.03, -0.62);
 
-    const coreMat = this.track(new THREE.MeshBasicMaterial({ color: 0xf59e0b }));
-    const coreGeo = this.track(new THREE.BoxGeometry(0.018, 0.045, 0.74));
+    const coreMat = this.track(new THREE.MeshBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 1 }));
+    const coreGeo = this.track(new THREE.BoxGeometry(0.016, 0.04, 0.72));
     const coreL = new THREE.Mesh(coreGeo, coreMat);
-    coreL.position.set(-0.042, 0.03, -0.6);
+    coreL.position.set(-0.04, 0.03, -0.6);
     const coreR = new THREE.Mesh(coreGeo, coreMat);
-    coreR.position.set(0.042, 0.03, -0.6);
+    coreR.position.set(0.04, 0.03, -0.6);
+    this.registerAdsDimPart(coreL, coreMat, 1, 0.25, undefined);
+    this.registerAdsDimPart(coreR, undefined, 1, 0.25, undefined);
 
-    const scope = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.08, 0.08, 0.34)), m.darkMetal);
-    scope.position.set(0, 0.14, -0.06);
+    const scope = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.076, 0.076, 0.34)), m.darkMetal);
+    scope.position.set(0, 0.14, -0.08);
 
-    const lensMat = this.track(new THREE.MeshBasicMaterial({ color: 0xfb923c }));
-    const lens = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.065, 0.065, 0.02)), lensMat);
-    lens.position.set(0, 0.14, -0.235);
+    const lensMat = this.track(new THREE.MeshBasicMaterial({ color: 0xfb923c, transparent: true, opacity: 1 }));
+    const lens = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.062, 0.062, 0.018)), lensMat);
+    lens.position.set(0, 0.14, -0.255);
+    this.registerAdsDimPart(lens, lensMat, 1, 0.3, undefined);
 
     group.add(body, barrel, coreL, coreR, scope, lens);
     return group;

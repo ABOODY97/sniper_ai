@@ -39,8 +39,9 @@ export class RailgunSniper extends WeaponBase {
         color: 0xd946ef,
         sfx: 'sniper',
         isSniper: true,
-        restPos: new THREE.Vector3(0.29, -0.25, -0.52),
-        adsPos: new THREE.Vector3(0.0, -0.16, -0.3),
+        restPos: new THREE.Vector3(0.28, -0.24, -0.52),
+        // محور المنظار عند y=0.13 محاذي تماماً لمحور الكاميرا، ومؤخرة الهيكل عند z=-0.26
+        adsPos: new THREE.Vector3(0.0, -0.13, -0.49),
       },
       materials,
     );
@@ -48,20 +49,23 @@ export class RailgunSniper extends WeaponBase {
 
   protected buildModel(m: WeaponMaterials): THREE.Group {
     const group = new THREE.Group();
-    const body = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.12, 0.15, 0.65)), m.darkMetal);
-    const railGeo = this.track(new THREE.BoxGeometry(0.05, 0.035, 0.72));
+    const body = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.11, 0.14, 0.58)), m.darkMetal);
+    body.position.set(0, 0, -0.06);
+
+    const railGeo = this.track(new THREE.BoxGeometry(0.048, 0.032, 0.72));
     const railTop = new THREE.Mesh(railGeo, m.gunMetal);
-    railTop.position.set(0, 0.06, -0.58);
+    railTop.position.set(0, 0.058, -0.58);
     const railBot = new THREE.Mesh(railGeo, m.gunMetal);
     railBot.position.set(0, -0.01, -0.58);
 
-    const coreMat = this.track(new THREE.MeshBasicMaterial({ color: 0xd946ef }));
-    const core = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.026, 0.035, 0.7)), coreMat);
-    core.position.set(0, 0.025, -0.56);
+    const coreMat = this.track(new THREE.MeshBasicMaterial({ color: 0xd946ef, transparent: true, opacity: 1 }));
+    const core = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.024, 0.032, 0.7)), coreMat);
+    core.position.set(0, 0.024, -0.56);
+    this.registerAdsDimPart(core, coreMat, 1, 0.25, undefined);
 
-    const scope = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.038, 0.032, 0.34, 12)), m.darkMetal);
+    const scope = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.036, 0.03, 0.34, 12)), m.darkMetal);
     scope.rotation.x = Math.PI / 2;
-    scope.position.set(0, 0.13, -0.05);
+    scope.position.set(0, 0.13, -0.08);
 
     group.add(body, railTop, railBot, core, scope);
     return group;

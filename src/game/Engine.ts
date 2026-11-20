@@ -116,6 +116,8 @@ export class GameEngine {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.PerspectiveCamera;
+  private readonly weaponScene: THREE.Scene;
+  private readonly weaponCamera: THREE.PerspectiveCamera;
   private readonly envTexture: THREE.Texture;
 
   private readonly audio: AudioManager;
@@ -144,10 +146,13 @@ export class GameEngine {
   private tourAngle = 0;
   private hudSyncTimer = 0;
 
-  // حالة الإدخال
+  // حالة الإدخال والانتقال الموحّد للتصويب (ADS)
   private readonly keys: Record<string, boolean> = {};
   private isMouseDown = false;
   private isADS = false;
+  private adsBlend = 0;
+  private hipFovCurrent: number = PLAYER_CONSTANTS.BASE_HIP_FOV;
+  private adsFovCurrent = 56;
   private pointerWasLocked = false;
 
   // حالة الجلسة والموجات ووضع اللعب
@@ -230,6 +235,7 @@ export class GameEngine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.1;
+    this.renderer.autoClear = false;
     this.renderer.setSize(width, height);
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.container.appendChild(this.renderer.domElement);
@@ -252,12 +258,34 @@ export class GameEngine {
     dirLight.shadow.normalBias = 0.02;
     this.scene.add(dirLight);
 
-    // تهيئة الأنظمة الفرعية
+    // مشهد وكاميرا مستقلان لطبقة السلاح (FOV ثابت = 58، near = 0.01، far = 5) لمنع التضخم والقص أثناء التصويب
+    this.weaponScene = new THREE.Scene();
+    this.weaponScene.environment = this.envTexture;
+    this.weaponCamera = new THREE.PerspectiveCamera(58, width / height, 0.01, 5);
+    this.weaponScene.add(this.weaponCamera);
+
+    // إضاءة متوافقة مع المشهد الرئيسي ومثبتة على مشهد/كاميرا السلاح لإظهار خامات المعادن بوضوح
+    const weaponHemiLight = new THREE.HemisphereLight(0x93c5fd, 0x0f172a, 0.85);
+    this.weaponScene.add(weaponHemiLight);
+
+    const weaponKeyLight = new THREE.DirectionalLight(0xe0f2fe, 1.15);
+    weaponKeyLight.position.set(1.6, 2.4, 1.8);
+    this.weaponCamera.add(weaponKeyLight);
+    this.weaponCamera.add(weaponKeyLight.target);
+    weaponKeyLight.target.position.set(0, 0, -1);
+
+    const weaponRimLight = new THREE.DirectionalLight(0x38bdf8, 0.42);
+    weaponRimLight.position.set(-1.8, 0.9, -1.1);
+    this.weaponCamera.add(weaponRimLight);
+    this.weaponCamera.add(weaponRimLight.target);
+    weaponRimLight.target.position.set(0, 0, -0.5);
+
+    // تهيئة الأنظمة الفرعية (يُربط السلاح بكاميرا السلاح المستقلة بدلاً من الكاميرا الرئيسية)
     this.audio = new AudioManager();
     this.pools = new ObjectPools(this.scene);
     const maxAniso = this.renderer.capabilities.getMaxAnisotropy();
     this.mapManager = new MapManager(this.scene, hemiLight, dirLight, maxAniso);
-    this.weaponManager = new WeaponManager(this.camera);
+    this.weaponManager = new WeaponManager(this.weaponCamera);
     this.enemyManager = new EnemyManager(this.scene, this.mapManager, this.pools, this.audio);
     this.player = new Player(this.camera);
 
@@ -375,9 +403,10 @@ export class GameEngine {
     window.addEventListener('blur', this.onWindowBlurBound);
     document.addEventListener('visibilitychange', this.onVisibilityChangeBound);
 
-    // تجهيز الشادرز مرة واحدة على بطاقات الرسوميات الحقيقية
+    // تجهيز الشادرز مرة واحدة على بطاقات الرسوميات الحقيقية للمشهدين (العالم وطبقة السلاح)
     if (!this.isSoftwareGl) {
       this.renderer.compile(this.scene, this.camera);
+      this.renderer.compile(this.weaponScene, this.weaponCamera);
     }
 
     // دعم معامل البدء الفوري ?autostart=1 للاختبار والتجربة المباشرة
@@ -409,6 +438,7 @@ export class GameEngine {
         if (Number.isFinite(wIdx) && wIdx >= 0 && wIdx < this.weaponManager.weapons.length) {
           this.weaponManager.weapons[wIdx].unlocked = true;
           this.weaponManager.switchWeapon(wIdx);
+          this.adsFovCurrent = this.weaponManager.current.getEffectiveAdsFov(false);
         }
       }
       const zoomParam = params.get('zoom');
@@ -423,11 +453,16 @@ export class GameEngine {
       }
       if (params.get('ads') === '1') {
         this.isADS = true;
+        this.adsBlend = 1;
         const w = this.weaponManager.current;
-        this.camera.fov = w.getEffectiveAdsFov(false);
+        this.adsFovCurrent = w.getEffectiveAdsFov(false);
+        this.camera.fov = this.adsFovCurrent;
         this.camera.updateProjectionMatrix();
-        this.weaponManager.pivot.position.copy(w.config.adsPos);
+        this.weaponManager.snapToAdsBlend(1);
         this.weaponManager.pivot.visible = !w.isSniperWeapon();
+      } else {
+        this.adsBlend = 0;
+        this.weaponManager.snapToAdsBlend(0);
       }
       if (params.get('fire') === '1') {
         this.isMouseDown = true;
@@ -446,12 +481,32 @@ export class GameEngine {
       this.camera.lookAt(0, 2.2, 0);
     }
 
-    // رسم الإطار الأول فوراً لضمان ظهور المشهد دون شاشة سوداء
-    this.renderer.render(this.scene, this.camera);
+    // رسم الإطار الأول فوراً لضمان ظهور المشهد وطبقة السلاح دون شاشة سوداء
+    this.renderFrame();
 
     // تشغيل حلقة الرسم
     this.prevTime = performance.now();
     this.scheduleNextFrame();
+  }
+
+  /** مزامنة موقع ودوران كاميرا السلاح المستقلة مع الكاميرا الرئيسية (بما في ذلك الميل والاهتزاز) */
+  private syncWeaponCamera(): void {
+    this.camera.updateMatrixWorld(true);
+    this.weaponCamera.rotation.order = this.camera.rotation.order;
+    this.weaponCamera.position.copy(this.camera.position);
+    this.weaponCamera.quaternion.copy(this.camera.quaternion);
+    this.weaponCamera.updateMatrixWorld(true);
+  }
+
+  /** رسم العالم أولاً ثم مسح مخزن العمق ورسم طبقة السلاح بكاميرا مستقلة ثابتة الزاوية */
+  private renderFrame(): void {
+    this.renderer.clear();
+    this.renderer.render(this.scene, this.camera);
+    if (this.weaponManager.pivot.visible) {
+      this.syncWeaponCamera();
+      this.renderer.clearDepth();
+      this.renderer.render(this.weaponScene, this.weaponCamera);
+    }
   }
 
   /** تطبيق إعدادات الجودة والحساسية والصوت */
@@ -541,6 +596,8 @@ export class GameEngine {
   public pauseMission(): void {
     if (!this.isPlaying || this.isGameOver) return;
     this.isPlaying = false;
+    this.adsBlend = 0;
+    this.weaponManager.current.applyAdsVisuals(0);
     this.clearHeldInputs();
     this.audio.suspend();
     this.exitPointerLockSafe();
@@ -558,6 +615,8 @@ export class GameEngine {
     this.isPlaying = false;
     this.hasActiveSession = false;
     this.bossRushBreakTimer = 0;
+    this.adsBlend = 0;
+    this.weaponManager.current.applyAdsVisuals(0);
     this.clearHeldInputs();
     this.exitPointerLockSafe();
     this.clearDynamicWorldEntities();
@@ -616,6 +675,9 @@ export class GameEngine {
     this.player.reset();
     this.player.gravityMult = computeEffectiveGravity(this.mapManager.activeMap.gravityMult, false);
     this.weaponManager.reset();
+    this.adsBlend = 0;
+    this.hipFovCurrent = PLAYER_CONSTANTS.BASE_HIP_FOV;
+    this.adsFovCurrent = this.weaponManager.current.getEffectiveAdsFov(false);
     if (this.activeMode === 'boss_rush') {
       // في وضع تحدي الزعماء: جميع الأسلحة التسعة مفتوحة وممتلئة منذ البداية
       this.weaponManager.unlockAllWeapons();
@@ -1070,9 +1132,9 @@ export class GameEngine {
     this.weaponManager.muzzleLight.intensity = isMinigun ? 4.2 : 5;
     this.audio.play(cfg.sfx);
 
-    // تحديث مصفوفة الكاميرا قبل أي ارتداد لضمان خروج شعاع الإصابة من مركز الكاميرا
+    // تحديث مصفوفة الكاميرا ومزامنة كاميرا السلاح قبل أي ارتداد لضمان خروج شعاع الإصابة من مركز الكاميرا
     // وباتجاه نظرها الفعلي دون أي تأثير من الارتداد أو إزاحة مجسم السلاح أثناء التصويب (ADS offset)
-    this.camera.updateMatrixWorld(true);
+    this.syncWeaponCamera();
 
     // نقطة الفوهة تُستخدم فقط لبداية الأثر البصري (أو إطلاق الصاروخ)، لا لحساب شعاع الإصابة
     this.weaponManager.getMuzzleWorldPosition(_muzzleWorld);
@@ -1231,7 +1293,7 @@ export class GameEngine {
       return;
     }
 
-    this.camera.updateMatrixWorld(true);
+    this.syncWeaponCamera();
     this.camera.getWorldPosition(_rayOrigin);
     this.camera.getWorldDirection(_rayDir);
     this.weaponManager.getMuzzleWorldPosition(_muzzleWorld);
@@ -2175,7 +2237,13 @@ export class GameEngine {
       const num = parseInt(e.code.replace('Digit', ''), 10);
       if (num >= 1 && num <= 9) {
         const res = this.weaponManager.switchWeapon(num - 1);
-        if (!res.switched && res.lockedMessage) {
+        if (res.switched) {
+          this.adsBlend = 0;
+          this.adsFovCurrent = this.weaponManager.current.getEffectiveAdsFov(
+            this.empDisabledTimer > 0,
+          );
+          this.weaponManager.pivot.visible = true;
+        } else if (res.lockedMessage) {
           this.audio.play('empty');
         }
         this.syncWeaponHud();
@@ -2250,6 +2318,11 @@ export class GameEngine {
 
     const step = e.deltaY > 0 ? 1 : -1;
     if (this.weaponManager.cycleWeapon(step)) {
+      this.adsBlend = 0;
+      this.adsFovCurrent = this.weaponManager.current.getEffectiveAdsFov(
+        this.empDisabledTimer > 0,
+      );
+      this.weaponManager.pivot.visible = true;
       this.syncWeaponHud();
     }
   }
@@ -2269,6 +2342,8 @@ export class GameEngine {
     const height = this.container.clientHeight || window.innerHeight;
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    this.weaponCamera.aspect = width / height;
+    this.weaponCamera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
   }
 
@@ -2303,7 +2378,11 @@ export class GameEngine {
     const resHud = this.weaponManager.getResourceHudState();
     const activeADS = this.isADS && !this.player.isSprinting;
     const empActive = this.empDisabledTimer > 0;
-    const showScope = !empActive && activeADS && w.isSniperWeapon() && !this.weaponManager.isReloading;
+    const showScope =
+      !empActive &&
+      w.isSniperWeapon() &&
+      !this.weaponManager.isReloading &&
+      this.adsBlend > 0.9;
     const chSpread =
       (activeADS
         ? w.config.adsStyle === 'tight_choke'
@@ -2442,7 +2521,7 @@ export class GameEngine {
       this.camera.fov = 65;
       this.camera.updateProjectionMatrix();
       this.mapManager.updateWeather(rawDt, this.camera.position, false);
-      this.renderer.render(this.scene, this.camera);
+      this.renderFrame();
       this.scheduleNextFrame();
       return;
     }
@@ -2540,11 +2619,21 @@ export class GameEngine {
       }
       this.mapManager.updateShadowFocus(this.camera.position, this.renderer.shadowMap.enabled);
 
-      // 2. تحديث السلاح والإطلاق الآلي والتلقيم وقاذف اللهب المستمر
-      const wCfg = this.weaponManager.current.config;
+      // 2. معامل انتقال التصويب الموحّد (adsBlend: 0 → 1) لقيادة السلاح وزاوية الرؤية والمنظار بتزامن كامل
+      const activeWeapon = this.weaponManager.current;
+      const empActive = this.empDisabledTimer > 0;
+      const targetAds = activeADS && !this.weaponManager.isReloading ? 1 : 0;
+      const adsStep = 1 - Math.exp(-14 * rawDt);
+      this.adsBlend += (targetAds - this.adsBlend) * adsStep;
+      if (Math.abs(this.adsBlend - targetAds) < 0.002) {
+        this.adsBlend = targetAds;
+      }
+
+      // تحديث السلاح والإطلاق الآلي والتلقيم وقاذف اللهب المستمر باستخدام adsBlend الموحّد
+      const wCfg = activeWeapon.config;
       const { finishedReload } = this.weaponManager.update(
         rawDt,
-        activeADS,
+        this.adsBlend,
         this.player.isMoving,
         this.player.onGround,
         this.player.isSprinting,
@@ -2562,22 +2651,26 @@ export class GameEngine {
         this.fireWeapon();
       }
 
-      // 3. تحديث زاوية رؤية الكاميرا السلسة (بما فيها تكبير المنظار x4/x8/x12) واهتزاز المنظار وحبس النفس
-      const activeWeapon = this.weaponManager.current;
-      const empActive = this.empDisabledTimer > 0;
-      const effectiveAdsFov = activeWeapon.getEffectiveAdsFov(empActive);
-      const targetFov = activeADS
-        ? effectiveAdsFov
-        : this.player.dashTimer > 0
+      // 3. تحديث زاوية رؤية الكاميرا الرئيسية (العالم فقط) وعتبة إخفاء مجسم القناصة عند adsBlend > 0.9
+      const targetHipFov =
+        this.player.dashTimer > 0
           ? 87
           : this.player.isSprinting || this.player.isSliding
             ? 84
             : PLAYER_CONSTANTS.BASE_HIP_FOV;
-      this.camera.fov += (targetFov - this.camera.fov) * (1 - Math.exp(-12 * rawDt));
+      this.hipFovCurrent += (targetHipFov - this.hipFovCurrent) * (1 - Math.exp(-12 * rawDt));
+
+      const effectiveAdsFov = activeWeapon.getEffectiveAdsFov(empActive);
+      this.adsFovCurrent += (effectiveAdsFov - this.adsFovCurrent) * (1 - Math.exp(-14 * rawDt));
+
+      this.camera.fov = THREE.MathUtils.lerp(this.hipFovCurrent, this.adsFovCurrent, this.adsBlend);
       this.camera.updateProjectionMatrix();
 
       const showScope =
-        !empActive && activeADS && activeWeapon.isSniperWeapon() && !this.weaponManager.isReloading;
+        !empActive &&
+        activeWeapon.isSniperWeapon() &&
+        !this.weaponManager.isReloading &&
+        this.adsBlend > 0.9;
       this.weaponManager.pivot.visible = !showScope;
 
       const holdingShift = !!(this.keys['ShiftLeft'] || this.keys['ShiftRight']);
@@ -2848,8 +2941,8 @@ export class GameEngine {
     // تحديث الجزيئات وآثار الرصاص
     this.pools.updateEffects(dt);
 
-    // رسم الإطار ثلاثي الأبعاد
-    this.renderer.render(this.scene, this.camera);
+    // رسم الإطار ثلاثي الأبعاد (العالم ثم طبقة السلاح المستقلة بعد مسح العمق)
+    this.renderFrame();
     this.scheduleNextFrame();
   }
 

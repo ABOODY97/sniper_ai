@@ -34,8 +34,9 @@ export class RocketLauncher extends WeaponBase {
         adsSensitivityMult: 0.7,
         color: 0xfb923c,
         sfx: 'rocketLaunch',
-        restPos: new THREE.Vector3(0.34, -0.22, -0.44),
-        adsPos: new THREE.Vector3(0.14, -0.16, -0.34),
+        restPos: new THREE.Vector3(0.32, -0.22, -0.44),
+        // حلقة التصويب الجانبية عند (-0.11, 0.135) تصبح في المركز الدقيق (0, 0)، ومؤخرة الأنبوب عند z=-0.27
+        adsPos: new THREE.Vector3(0.11, -0.135, -0.42),
       },
       materials,
     );
@@ -44,25 +45,38 @@ export class RocketLauncher extends WeaponBase {
   protected buildModel(m: WeaponMaterials): THREE.Group {
     const group = new THREE.Group();
     const tubeMat = this.track(new THREE.MeshStandardMaterial({ color: 0x3f3f46, metalness: 0.72, roughness: 0.32 }));
-    const tube = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.095, 0.095, 1.05, 14)), tubeMat);
+    const tube = new THREE.Mesh(this.track(new THREE.CylinderGeometry(0.088, 0.088, 0.94, 14)), tubeMat);
     tube.rotation.x = Math.PI / 2;
-    tube.position.set(0, 0.04, -0.25);
+    tube.position.set(0, 0.04, -0.32);
 
-    const rimMat = this.track(new THREE.MeshBasicMaterial({ color: 0xf97316 }));
-    const rim = new THREE.Mesh(this.track(new THREE.TorusGeometry(0.1, 0.02, 8, 16)), rimMat);
-    rim.position.set(0, 0.04, -0.77);
+    const rimMat = this.track(new THREE.MeshBasicMaterial({ color: 0xf97316, transparent: true, opacity: 1 }));
+    const rim = new THREE.Mesh(this.track(new THREE.TorusGeometry(0.092, 0.016, 8, 16)), rimMat);
+    rim.position.set(0, 0.04, -0.78);
+    this.registerAdsDimPart(rim, rimMat, 1, 0.35, undefined);
 
     const coneMat = this.track(
       new THREE.MeshStandardMaterial({ color: 0xdc2626, emissive: 0x7f1d1d, roughness: 0.4 }),
     );
-    const cone = new THREE.Mesh(this.track(new THREE.ConeGeometry(0.075, 0.22, 12)), coneMat);
+    const cone = new THREE.Mesh(this.track(new THREE.ConeGeometry(0.072, 0.2, 12)), coneMat);
     cone.rotation.x = -Math.PI / 2;
-    cone.position.set(0, 0.04, -0.82);
+    cone.position.set(0, 0.04, -0.83);
 
-    const grip = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.07, 0.18, 0.12)), m.matteGrip);
-    grip.position.set(0, -0.1, -0.12);
+    const grip = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.068, 0.17, 0.11)), m.matteGrip);
+    grip.position.set(0, -0.095, -0.14);
 
-    group.add(tube, rim, cone, grip);
+    // ذراع ومنظار حلقي جانبي للقاذف يضع نقطة التصويب على محور الكاميرا (0, 0) أثناء ADS
+    const sightArm = new THREE.Mesh(this.track(new THREE.BoxGeometry(0.075, 0.014, 0.02)), m.darkMetal);
+    sightArm.position.set(-0.078, 0.095, -0.22);
+    sightArm.rotation.z = -0.58;
+
+    const sightRing = new THREE.Mesh(this.track(new THREE.TorusGeometry(0.028, 0.0038, 8, 20)), m.darkMetal);
+    sightRing.position.set(-0.11, 0.135, -0.22);
+
+    const sightPipMat = this.track(new THREE.MeshBasicMaterial({ color: 0xfb923c }));
+    const sightPip = new THREE.Mesh(this.track(new THREE.SphereGeometry(0.0028, 8, 8)), sightPipMat);
+    sightPip.position.set(-0.11, 0.135, -0.22);
+
+    group.add(tube, rim, cone, grip, sightArm, sightRing, sightPip);
     return group;
   }
 }

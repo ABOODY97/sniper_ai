@@ -58,7 +58,8 @@ export class Flamethrower extends WeaponBase {
         fuelRegenPerSec: PLAYER_CONSTANTS.FLAME_FUEL_REGEN_PER_SEC,
         flameDirectDps: PLAYER_CONSTANTS.FLAME_DIRECT_DPS,
         restPos: new THREE.Vector3(0.28, -0.3, -0.52),
-        adsPos: new THREE.Vector3(0.12, -0.22, -0.46),
+        // حلقة التصويب العلوية عند (0, 0.125) محاذية لمركز الشاشة، ومؤخرة الهيكل عند z=-0.34
+        adsPos: new THREE.Vector3(0.0, -0.125, -0.44),
       },
       materials,
     );
@@ -136,6 +137,24 @@ export class Flamethrower extends WeaponBase {
       this.gaugeMat,
     );
     fuelBar.position.set(0, 0.072, -0.08);
+    this.registerAdsDimPart(fuelBar, this.gaugeMat, 1, 0.35, undefined);
+
+    // حلقة تصويب علوية مفتوحة وسن أمامي على خط نظر (0, 0.125) أثناء التصويب
+    const sightRing = new THREE.Mesh(
+      this.track(new THREE.TorusGeometry(0.022, 0.0032, 8, 18)),
+      m.darkMetal,
+    );
+    sightRing.position.set(0, 0.125, -0.16);
+    const sightPost = new THREE.Mesh(
+      this.track(new THREE.BoxGeometry(0.006, 0.028, 0.014)),
+      m.darkMetal,
+    );
+    sightPost.position.set(0, 0.094, -0.16);
+    const frontPin = new THREE.Mesh(
+      this.track(new THREE.BoxGeometry(0.005, 0.042, 0.01)),
+      copperMat,
+    );
+    frontPin.position.set(0, 0.104, -0.78);
 
     // ذراع الشعلة الاسترشادية (Pilot Light) عند الفوهة
     const igniterArm = new THREE.Mesh(
@@ -166,6 +185,9 @@ export class Flamethrower extends WeaponBase {
       rightTank,
       topPipe,
       fuelBar,
+      sightRing,
+      sightPost,
+      frontPin,
       igniterArm,
       this.pilotFlameMesh,
       grip,

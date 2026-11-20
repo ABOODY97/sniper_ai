@@ -33,6 +33,13 @@ export abstract class WeaponBase {
   public readonly model: THREE.Group;
 
   protected readonly ownDisposables: Array<THREE.BufferGeometry | THREE.Material> = [];
+  protected readonly adsDimParts: Array<{
+    mesh: THREE.Object3D;
+    mat?: THREE.Material;
+    baseOpacity: number;
+    adsOpacity: number;
+    hideThreshold?: number;
+  }> = [];
 
   constructor(config: WeaponConfig, materials: WeaponMaterials) {
     this.config = config;
@@ -49,6 +56,35 @@ export abstract class WeaponBase {
     return res;
   }
 
+  /** تسجيل جزء مضيء أو جانبي ليُخفّت أو يختفي بسلاسة أثناء التصويب (ADS) دون تشويش خط النظر */
+  protected registerAdsDimPart(
+    mesh: THREE.Object3D,
+    mat?: THREE.Material,
+    baseOpacity = 1,
+    adsOpacity = 0,
+    hideThreshold = 0.72,
+  ): void {
+    if (mat) {
+      mat.transparent = true;
+      mat.opacity = baseOpacity;
+    }
+    this.adsDimParts.push({ mesh, mat, baseOpacity, adsOpacity, hideThreshold });
+  }
+
+  /** تطبيق التأثيرات البصرية للتصويب تدريجياً وفق معامل adsBlend الموحّد (0 → 1) */
+  public applyAdsVisuals(adsBlend: number): void {
+    const t = Math.max(0, Math.min(1, adsBlend));
+    for (let i = 0; i < this.adsDimParts.length; i++) {
+      const entry = this.adsDimParts[i];
+      if (entry.mat) {
+        entry.mat.opacity = THREE.MathUtils.lerp(entry.baseOpacity, entry.adsOpacity, t);
+      }
+      if (entry.hideThreshold !== undefined) {
+        entry.mesh.visible = t < entry.hideThreshold;
+      }
+    }
+  }
+
   protected abstract buildModel(materials: WeaponMaterials): THREE.Group;
 
   /** إعادة ضبط السلاح ومستوى التكبير عند بدء مهمة جديدة */
@@ -59,6 +95,7 @@ export abstract class WeaponBase {
     this.mag = this.magSize;
     this.reserve = this.maxReserve - this.magSize;
     this.zoomIndex = 0;
+    this.applyAdsVisuals(0);
   }
 
   /** توسيع سعة المخزن والذخيرة (عند اختيار ترقية الذخيرة) */
@@ -104,7 +141,7 @@ export abstract class WeaponBase {
 
   /** استدعاء عند إغماد السلاح للتبديل إلى سلاح آخر */
   public onHolster(): void {
-    // يُعاد تعريفها في الأسلحة ذات حالة الدوران أو التشغيل المستمر
+    this.applyAdsVisuals(0);
   }
 
   /** التحقق مما إذا كان السلاح من فئة القناصات */
